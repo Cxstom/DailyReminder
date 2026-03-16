@@ -1,0 +1,9 @@
+## Interface: 20505
+## Title: Daily Reminder
+## Notes: Reminds you to turn in completed TBC daily quests (Normal, Heroic, PVP)
+## Author: DailyReminder
+## Version: 1.1
+## SavedVariables: DailyReminderDB
+
+DailyReminder.lua
+
