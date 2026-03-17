@@ -60,7 +60,7 @@ local pvpDailies = {
 
 local defaults = {
     sound = "RAID_WARNING",
-    alertType = "RAID_WARNING", -- "CHAT", "RAID_WARNING", "POPUP"
+    alertType = "POPUP", -- "CHAT", "RAID_WARNING", "POPUP"
     minimapAngle = 220,
     minimapHidden = false,
 }
@@ -70,7 +70,9 @@ local soundOptions = {
     { key = "RAID_WARNING",  label = "Raid Warning" },
     { key = "READY_CHECK",   label = "Ready Check" },
     { key = "ALARM_CLOCK",   label = "Alarm Clock" },
-    { key = "QUEST_COMPLETE",label = "Quest Complete" },
+    { key = "SPELLBOOK_OPEN",label = "Spell Book" },
+    { key = "GNOME_ALERT",   label = "Gnome Alert Bot" },
+    { key = "MALACRASS_WARN",label = "Malacrass Warning" },
 }
 
 local alertOptions = {
@@ -89,8 +91,10 @@ local dismissedThisSession = false
 local soundMap = {
     RAID_WARNING  = SOUNDKIT.RAID_WARNING,
     READY_CHECK   = SOUNDKIT.READY_CHECK,
-    ALARM_CLOCK   = SOUNDKIT.ALARM_CLOCK_WARNING_3,
-    QUEST_COMPLETE = SOUNDKIT.UI_QUEST_ROLLING_REWARD_LOOT,
+    ALARM_CLOCK   = SOUNDKIT.ALARM_CLOCK_WARNING_2,
+    SPELLBOOK_OPEN = SOUNDKIT.SPELLBOOKOPEN,
+    GNOME_ALERT   = 5761,
+    MALACRASS_WARN = 12057,
 }
 
 local function PlayChosenSound()
