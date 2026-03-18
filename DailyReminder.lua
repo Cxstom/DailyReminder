@@ -70,7 +70,7 @@ local soundOptions = {
     { key = "RAID_WARNING",  label = "Raid Warning" },
     { key = "READY_CHECK",   label = "Ready Check" },
     { key = "ALARM_CLOCK",   label = "Alarm Clock" },
-    { key = "SPELLBOOK_OPEN",label = "Spell Book" },
+    { key = "SPELLBOOK_OPEN",label = "Spell Book Open" },
     { key = "GNOME_ALERT",   label = "Gnome Alert Bot" },
     { key = "MALACRASS_WARN",label = "Malacrass Warning" },
 }
@@ -92,7 +92,7 @@ local soundMap = {
     RAID_WARNING  = SOUNDKIT.RAID_WARNING,
     READY_CHECK   = SOUNDKIT.READY_CHECK,
     ALARM_CLOCK   = SOUNDKIT.ALARM_CLOCK_WARNING_2,
-    SPELLBOOK_OPEN = 603,
+    SPELLBOOK_OPEN = 875,
     GNOME_ALERT   = 5761,
     MALACRASS_WARN = 12057,
 }
