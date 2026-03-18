@@ -275,7 +275,9 @@ local function CreateOptionDropdown(parent, labelText, options, dbKey, anchorTo,
 
     local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     if anchorTo then
-        label:SetPoint("TOPLEFT", anchorTo, "BOTTOMLEFT", 0, offsetY or -24)
+        -- Compensate for UIDropDownMenu's -16 left shift when chaining dropdowns
+        local xOff = anchorTo:GetObjectType() == "FontString" and 0 or 16
+        label:SetPoint("TOPLEFT", anchorTo, "BOTTOMLEFT", xOff, offsetY or -24)
     else
         label:SetPoint("TOPLEFT", 20, offsetY or -20)
     end
