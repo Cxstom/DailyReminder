@@ -2,7 +2,7 @@
 ## Title: Daily Reminder
 ## Notes: Reminds you to turn in completed TBC daily quests and tracks Consortium monthly quest status
 ## Author: DailyReminder
-## Version: 1.3
+## Version: 1.4
 ## SavedVariables: DailyReminderDB
 
 DailyReminder.lua

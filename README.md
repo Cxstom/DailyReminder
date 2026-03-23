@@ -5,7 +5,7 @@ A lightweight World of Warcraft addon that reminds you to turn in completed dail
 ## Features
 
 - **First-time setup wizard** — on first install, a popup lets you pick which daily categories to track
-- **Automatic detection** of completed dungeon, heroic, PvP, and Ogri'la / Sha'tari Skyguard dailies
+- **Automatic detection** of completed dungeon, heroic, PvP, Ogri'la / Sha'tari Skyguard, cooking, and fishing dailies
 - **Consortium monthly tracking** — monitors Membership Benefits quest availability based on your reputation, shared across all characters on the account
 - **Multiple alert types** — chat message, raid warning text, or popup window
 - **Configurable sound alerts** — choose from several built-in sounds or disable them
@@ -21,6 +21,8 @@ A lightweight World of Warcraft addon that reminds you to turn in completed dail
 | Heroic   | All TBC heroic dungeon dailies including Magister's Terrace |
 | PvP      | Call to Arms battleground dailies + world PvP (Hellfire, Terokkar, Nagrand) for both factions |
 | Ogri'la / Sha'tari Skyguard | The Relic's Emanation, Bomb Them Again!, Wrangle More Aether Rays!, Banish More Demons, Fires Over Skettis, Escape from Skettis |
+| Cooking | Manalicious, Revenge is Tasty, Soup for the Soul, Super Hot Stew |
+| Fishing | Bait Bandits, Crocolisks in the City, Felblood Fillet, Shrimpin' Ain't Easy, The One That Got Away |
 | Consortium (Monthly) | Membership Benefits — varies by reputation (Friendly / Honored / Revered / Exalted) |
 
 ## Slash Commands

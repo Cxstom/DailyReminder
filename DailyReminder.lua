@@ -72,6 +72,23 @@ local ogrilaDailies = {
     [11085] = "Escape from Skettis",
 }
 
+-- Cooking Dailies
+local cookingDailies = {
+    [11380] = "Manalicious",
+    [11377] = "Revenge is Tasty",
+    [11381] = "Soup for the Soul",
+    [11379] = "Super Hot Stew",
+}
+
+-- Fishing Dailies
+local fishingDailies = {
+    [11666] = "Bait Bandits",
+    [11665] = "Crocolisks in the City",
+    [11669] = "Felblood Fillet",
+    [11668] = "Shrimpin' Ain't Easy",
+    [11667] = "The One That Got Away",
+}
+
 ------------------------------------------------------------
 -- Defaults & Settings
 ------------------------------------------------------------
@@ -85,6 +102,8 @@ local defaults = {
     checkHeroics = true,
     checkPVP = true,
     checkOgrila = true,
+    checkCooking = true,
+    checkFishing = true,
     checkConsortium = true,
     firstRun = true,
 }
@@ -215,7 +234,7 @@ local function CreateSetupFrame()
     if setupFrame then return setupFrame end
 
     local f = CreateFrame("Frame", "DailyReminderSetupPopup", UIParent, "BackdropTemplate")
-    f:SetSize(400, 350)
+    f:SetSize(400, 400)
     f:SetPoint("CENTER")
     f:SetMovable(true)
     f:EnableMouse(true)
@@ -262,7 +281,9 @@ local function CreateSetupFrame()
     local cb2 = CreateSetupCheckbox(f, "Heroic Dungeon Dailies",          "checkHeroics",  cb1, -4)
     local cb3 = CreateSetupCheckbox(f, "PVP Dailies (Battlegrounds & World)", "checkPVP",  cb2, -4)
     local cb4 = CreateSetupCheckbox(f, "Ogri'la / Sha'tari Skyguard Dailies", "checkOgrila", cb3, -4)
-    local cb5 = CreateSetupCheckbox(f, "Consortium Monthly Quest",             "checkConsortium", cb4, -4)
+    local cb5 = CreateSetupCheckbox(f, "Cooking Dailies",                      "checkCooking", cb4, -4)
+    local cb6 = CreateSetupCheckbox(f, "Fishing Dailies",                      "checkFishing", cb5, -4)
+    local cb7 = CreateSetupCheckbox(f, "Consortium Monthly Quest",             "checkConsortium", cb6, -4)
 
     -- Save button
     local saveBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
@@ -616,6 +637,8 @@ RunCheck = function()
         { table = heroicDailies,  category = "Heroic",                       enabled = DailyReminderDB.checkHeroics },
         { table = pvpDailies,     category = "PVP",                          enabled = DailyReminderDB.checkPVP },
         { table = ogrilaDailies,  category = "Ogri'la / Sha'tari Skyguard", enabled = DailyReminderDB.checkOgrila },
+        { table = cookingDailies, category = "Cooking",                      enabled = DailyReminderDB.checkCooking },
+        { table = fishingDailies, category = "Fishing",                      enabled = DailyReminderDB.checkFishing },
     }
     for _, dt in ipairs(dailyTables) do
         if dt.enabled then
@@ -796,8 +819,10 @@ local function CreateSettingsCanvas()
     local sCb1 = CreateSettingsCheckbox(canvas, "Dungeon Dailies (Normal)",             "checkDungeons", catHeader, -4)
     local sCb2 = CreateSettingsCheckbox(canvas, "Heroic Dungeon Dailies",               "checkHeroics",  sCb1, -2)
     local sCb3 = CreateSettingsCheckbox(canvas, "PVP Dailies (Battlegrounds & World)",  "checkPVP",      sCb2, -2)
-    local sCb4 = CreateSettingsCheckbox(canvas, "Ogri'la / Sha'tari Skyguard Dailies",  "checkOgrila",   sCb3, -2)
-    local sCb5 = CreateSettingsCheckbox(canvas, "Consortium Monthly Quest",              "checkConsortium", sCb4, -2)
+    local sCb4 = CreateSettingsCheckbox(canvas, "Ogri'la / Sha'tari Skyguard Dailies",  "checkOgrila",     sCb3, -2)
+    local sCb5 = CreateSettingsCheckbox(canvas, "Cooking Dailies",                      "checkCooking",    sCb4, -2)
+    local sCb6 = CreateSettingsCheckbox(canvas, "Fishing Dailies",                      "checkFishing",    sCb5, -2)
+    local sCb7 = CreateSettingsCheckbox(canvas, "Consortium Monthly Quest",              "checkConsortium", sCb6, -2)
 
     return canvas
 end
