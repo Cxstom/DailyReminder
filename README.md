@@ -1,15 +1,16 @@
 # Daily Reminder
 
-A lightweight World of Warcraft addon that reminds you to turn in completed daily quests.
+A lightweight World of Warcraft addon that reminds you to turn in completed daily quests and tracks Consortium monthly quest status across all your characters.
 
 ## Features
 
 - **First-time setup wizard** — on first install, a popup lets you pick which daily categories to track
 - **Automatic detection** of completed dungeon, heroic, PvP, and Ogri'la / Sha'tari Skyguard dailies
+- **Consortium monthly tracking** — monitors Membership Benefits quest availability based on your reputation, shared across all characters on the account
 - **Multiple alert types** — chat message, raid warning text, or popup window
 - **Configurable sound alerts** — choose from several built-in sounds or disable them
 - **Category toggles** — enable or disable tracking per category at any time
-- **Minimap button** — left-click to open settings, right-click to check dailies on demand
+- **Minimap button** — left-click to open settings, shift-click for Consortium status, right-click to check dailies
 - **Session dismiss** — silence reminders until your next login
 
 ## Tracked Dailies
@@ -20,6 +21,7 @@ A lightweight World of Warcraft addon that reminds you to turn in completed dail
 | Heroic   | All TBC heroic dungeon dailies including Magister's Terrace |
 | PvP      | Call to Arms battleground dailies + world PvP (Hellfire, Terokkar, Nagrand) for both factions |
 | Ogri'la / Sha'tari Skyguard | The Relic's Emanation, Bomb Them Again!, Wrangle More Aether Rays!, Banish More Demons, Fires Over Skettis, Escape from Skettis |
+| Consortium (Monthly) | Membership Benefits — varies by reputation (Friendly / Honored / Revered / Exalted) |
 
 ## Slash Commands
 
@@ -29,6 +31,7 @@ A lightweight World of Warcraft addon that reminds you to turn in completed dail
 | `/dr check` | Force a daily quest check |
 | `/dr resume` | Re-enable reminders after dismissing |
 | `/dr minimap` | Toggle the minimap button |
+| `/dr consortium` | Open Consortium status window |
 
 ## Installation
 

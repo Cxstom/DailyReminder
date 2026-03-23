@@ -85,6 +85,7 @@ local defaults = {
     checkHeroics = true,
     checkPVP = true,
     checkOgrila = true,
+    checkConsortium = true,
     firstRun = true,
 }
 
@@ -200,6 +201,10 @@ local function ShowPopup(lines)
     f:Show()
 end
 
+-- Forward declarations (defined later, referenced in callbacks above their definition)
+local RunCheck
+local ShowConsortiumWindow
+
 ------------------------------------------------------------
 -- First-Run Setup Popup
 ------------------------------------------------------------
@@ -210,7 +215,7 @@ local function CreateSetupFrame()
     if setupFrame then return setupFrame end
 
     local f = CreateFrame("Frame", "DailyReminderSetupPopup", UIParent, "BackdropTemplate")
-    f:SetSize(400, 320)
+    f:SetSize(400, 350)
     f:SetPoint("CENTER")
     f:SetMovable(true)
     f:EnableMouse(true)
@@ -257,6 +262,7 @@ local function CreateSetupFrame()
     local cb2 = CreateSetupCheckbox(f, "Heroic Dungeon Dailies",          "checkHeroics",  cb1, -4)
     local cb3 = CreateSetupCheckbox(f, "PVP Dailies (Battlegrounds & World)", "checkPVP",  cb2, -4)
     local cb4 = CreateSetupCheckbox(f, "Ogri'la / Sha'tari Skyguard Dailies", "checkOgrila", cb3, -4)
+    local cb5 = CreateSetupCheckbox(f, "Consortium Monthly Quest",             "checkConsortium", cb4, -4)
 
     -- Save button
     local saveBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
@@ -282,6 +288,288 @@ end
 local function ShowFirstRunSetup()
     local f = CreateSetupFrame()
     f:Show()
+end
+
+------------------------------------------------------------
+-- Consortium Monthly Quest Tracking
+------------------------------------------------------------
+
+local CONSORTIUM_FACTION_ID = 933
+
+-- Quest ID varies by reputation standing with The Consortium
+local consortiumQuestsByStanding = {
+    [5] = { id = 9886, label = "Friendly" },  -- Friendly
+    [6] = { id = 9884, label = "Honored" },   -- Honored
+    [7] = { id = 9885, label = "Revered" },   -- Revered
+    [8] = { id = 9887, label = "Exalted" },   -- Exalted
+}
+
+local allConsortiumQuestIDs = { 9886, 9884, 9885, 9887 }
+
+local consortiumStatusDisplay = {
+    available    = { text = "Available",        color = "|cff00ff00" },
+    in_progress  = { text = "In Progress",      color = "|cffffff00" },
+    ready        = { text = "Ready to Turn In",  color = "|cffff8000" },
+    completed    = { text = "Completed",         color = "|cff888888" },
+    not_eligible = { text = "Not Eligible",      color = "|cff666666" },
+    stale        = { text = "Needs Update",      color = "|cffff5555" },
+}
+
+-- Check if a quest has been turned in (works across API versions)
+local function IsQuestTurnedIn(questID)
+    if C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted then
+        return C_QuestLog.IsQuestFlaggedCompleted(questID)
+    elseif IsQuestFlaggedCompleted then
+        return IsQuestFlaggedCompleted(questID)
+    end
+    return false
+end
+
+local function GetCharacterKey()
+    return UnitName("player") .. "-" .. GetRealmName()
+end
+
+local function GetCurrentMonth()
+    return date("%Y-%m")
+end
+
+-- Returns standing ID (5-8) and quest info table, or nil if below Friendly
+local function GetConsortiumStanding()
+    local name, _, standingID = GetFactionInfoByID(CONSORTIUM_FACTION_ID)
+    if not name or not standingID or standingID < 5 then
+        return nil, nil
+    end
+    return standingID, consortiumQuestsByStanding[standingID]
+end
+
+-- Determine the current character's Consortium quest status
+local function GetConsortiumQuestStatus()
+    local standingID, questInfo = GetConsortiumStanding()
+    if not standingID or not questInfo then
+        return "not_eligible", nil, nil
+    end
+
+    local questID = questInfo.id
+    local standingLabel = questInfo.label
+
+    -- Check if any consortium quest variant was already turned in this month
+    for _, qid in ipairs(allConsortiumQuestIDs) do
+        if IsQuestTurnedIn(qid) then
+            return "completed", questID, standingLabel
+        end
+    end
+
+    -- Check if any consortium quest is currently in the quest log
+    local numEntries = (C_QuestLog and C_QuestLog.GetNumQuestLogEntries or GetNumQuestLogEntries)()
+    for i = 1, (numEntries or 0) do
+        local qID, isComplete
+        if C_QuestLog and C_QuestLog.GetInfo then
+            local info = C_QuestLog.GetInfo(i)
+            if info and not info.isHeader and info.questID then
+                qID = info.questID
+                isComplete = info.isComplete
+            end
+        else
+            local _, _, _, isHeader, _, comp, _, id = GetQuestLogTitle(i)
+            if not isHeader then
+                qID = id
+                isComplete = comp
+            end
+        end
+        if qID then
+            for _, cqid in ipairs(allConsortiumQuestIDs) do
+                if qID == cqid then
+                    return isComplete and "ready" or "in_progress", questID, standingLabel
+                end
+            end
+        end
+    end
+
+    return "available", questID, standingLabel
+end
+
+-- Save current character's Consortium data to the shared DB
+local function UpdateConsortiumData()
+    if not DailyReminderDB.consortium then
+        DailyReminderDB.consortium = {}
+    end
+
+    local key = GetCharacterKey()
+    local status, questID, standingLabel = GetConsortiumQuestStatus()
+    local _, englishClass = UnitClass("player")
+    local level = UnitLevel("player")
+
+    DailyReminderDB.consortium[key] = {
+        standing    = standingLabel,
+        questID     = questID,
+        status      = status,
+        lastUpdated = date("%Y-%m-%d"),
+        month       = GetCurrentMonth(),
+        class       = englishClass,
+        level       = level,
+    }
+
+    return status, questID, standingLabel
+end
+
+------------------------------------------------------------
+-- Consortium Status Window
+------------------------------------------------------------
+
+local consortiumFrame
+
+local function CreateConsortiumFrame()
+    if consortiumFrame then return consortiumFrame end
+
+    local f = CreateFrame("Frame", "DailyReminderConsortiumFrame", UIParent, "BackdropTemplate")
+    f:SetSize(540, 300)
+    f:SetPoint("CENTER")
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    f:SetFrameStrata("DIALOG")
+
+    f:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 32,
+        insets = { left = 8, right = 8, top = 8, bottom = 8 },
+    })
+
+    -- Title
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", 0, -16)
+    title:SetText("|cff00ff00Consortium — Monthly Quest Status|r")
+
+    -- Subtitle
+    local subtitle = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    subtitle:SetPoint("TOP", title, "BOTTOM", 0, -4)
+    subtitle:SetText("Membership Benefits — resets on the 1st of each month")
+
+    -- Close button
+    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", -4, -4)
+
+    -- Column headers
+    local headerY = -56
+    local colPositions = { 24, 180, 270, 420 }
+    local headerTexts  = { "Character", "Standing", "Status", "Last Updated" }
+    for idx, text in ipairs(headerTexts) do
+        local fs = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        fs:SetPoint("TOPLEFT", colPositions[idx], headerY)
+        fs:SetText(text)
+    end
+
+    -- Separator line
+    local sep = f:CreateTexture(nil, "ARTWORK")
+    sep:SetColorTexture(0.5, 0.5, 0.5, 0.5)
+    sep:SetSize(496, 1)
+    sep:SetPoint("TOPLEFT", 22, headerY - 16)
+
+    f.rows = {}
+    f.colPositions = colPositions
+    f.contentStartY = headerY - 24
+
+    f:Hide()
+    consortiumFrame = f
+    return f
+end
+
+local function RefreshConsortiumWindow()
+    local f = CreateConsortiumFrame()
+
+    -- Clear previous rows
+    for _, row in ipairs(f.rows) do
+        for _, fs in pairs(row) do
+            fs:SetText("")
+            fs:Hide()
+        end
+    end
+
+    -- Update current character's data
+    UpdateConsortiumData()
+
+    local data = DailyReminderDB.consortium or {}
+    local currentMonth = GetCurrentMonth()
+    local y = f.contentStartY
+    local rowIndex = 0
+
+    -- Sort characters alphabetically
+    local sortedKeys = {}
+    for k in pairs(data) do
+        table.insert(sortedKeys, k)
+    end
+    table.sort(sortedKeys)
+
+    for _, charKey in ipairs(sortedKeys) do
+        local info = data[charKey]
+        rowIndex = rowIndex + 1
+
+        -- Detect stale data from a previous month
+        local displayStatus = info.status
+        if info.month and info.month ~= currentMonth then
+            if info.status ~= "not_eligible" and info.status ~= "available" then
+                displayStatus = "stale"
+            end
+        end
+
+        local statusInfo = consortiumStatusDisplay[displayStatus] or consortiumStatusDisplay.stale
+
+        -- Class-coloured character name
+        local nameDisplay = charKey
+        if info.class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[info.class] then
+            local c = RAID_CLASS_COLORS[info.class]
+            nameDisplay = string.format("|cff%02x%02x%02x%s|r",
+                c.r * 255, c.g * 255, c.b * 255, charKey)
+        end
+
+        -- Create or reuse row font strings
+        if not f.rows[rowIndex] then
+            f.rows[rowIndex] = {}
+        end
+        local row = f.rows[rowIndex]
+
+        local fields = {
+            { key = "name",    text = nameDisplay },
+            { key = "standing", text = info.standing or "—" },
+            { key = "status",  text = statusInfo.color .. statusInfo.text .. "|r" },
+            { key = "updated", text = info.lastUpdated or "—" },
+        }
+        for colIdx, field in ipairs(fields) do
+            if not row[field.key] then
+                row[field.key] = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            end
+            row[field.key]:ClearAllPoints()
+            row[field.key]:SetPoint("TOPLEFT", f.colPositions[colIdx], y)
+            row[field.key]:SetText(field.text)
+            row[field.key]:Show()
+        end
+
+        y = y - 20
+    end
+
+    -- Empty state
+    if rowIndex == 0 then
+        if not f.rows[1] then f.rows[1] = {} end
+        if not f.rows[1].name then
+            f.rows[1].name = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        end
+        f.rows[1].name:ClearAllPoints()
+        f.rows[1].name:SetPoint("TOPLEFT", f.colPositions[1], f.contentStartY)
+        f.rows[1].name:SetText("|cff999999No character data yet. Log in to your characters to collect information.|r")
+        f.rows[1].name:Show()
+        rowIndex = 1
+    end
+
+    -- Resize frame to fit content
+    f:SetHeight(math.max(180, (-f.contentStartY) + (rowIndex * 20) + 40))
+end
+
+ShowConsortiumWindow = function()
+    RefreshConsortiumWindow()
+    consortiumFrame:Show()
 end
 
 ------------------------------------------------------------
@@ -316,7 +604,7 @@ local function GetCompletedQuestIDs()
     return completed
 end
 
-local function RunCheck()
+RunCheck = function()
     if dismissedThisSession then return end
 
     local completed = GetCompletedQuestIDs()
@@ -324,9 +612,9 @@ local function RunCheck()
 
     -- Check each daily table against completed quests (only if enabled)
     local dailyTables = {
-        { table = dungeonDailies, category = "Dungeon",                  enabled = DailyReminderDB.checkDungeons },
-        { table = heroicDailies,  category = "Heroic",                   enabled = DailyReminderDB.checkHeroics },
-        { table = pvpDailies,     category = "PVP",                      enabled = DailyReminderDB.checkPVP },
+        { table = dungeonDailies, category = "Dungeon",                      enabled = DailyReminderDB.checkDungeons },
+        { table = heroicDailies,  category = "Heroic",                       enabled = DailyReminderDB.checkHeroics },
+        { table = pvpDailies,     category = "PVP",                          enabled = DailyReminderDB.checkPVP },
         { table = ogrilaDailies,  category = "Ogri'la / Sha'tari Skyguard", enabled = DailyReminderDB.checkOgrila },
     }
     for _, dt in ipairs(dailyTables) do
@@ -336,6 +624,16 @@ local function RunCheck()
                     table.insert(results, { category = dt.category, name = questName })
                 end
             end
+        end
+    end
+
+    -- Check Consortium monthly quest (if enabled)
+    if DailyReminderDB.checkConsortium then
+        local status = UpdateConsortiumData()
+        if status == "available" then
+            table.insert(results, { category = "Consortium", name = "Membership Benefits (available to pick up)" })
+        elseif status == "ready" then
+            table.insert(results, { category = "Consortium", name = "Membership Benefits (ready to turn in)" })
         end
     end
 
@@ -499,6 +797,7 @@ local function CreateSettingsCanvas()
     local sCb2 = CreateSettingsCheckbox(canvas, "Heroic Dungeon Dailies",               "checkHeroics",  sCb1, -2)
     local sCb3 = CreateSettingsCheckbox(canvas, "PVP Dailies (Battlegrounds & World)",  "checkPVP",      sCb2, -2)
     local sCb4 = CreateSettingsCheckbox(canvas, "Ogri'la / Sha'tari Skyguard Dailies",  "checkOgrila",   sCb3, -2)
+    local sCb5 = CreateSettingsCheckbox(canvas, "Consortium Monthly Quest",              "checkConsortium", sCb4, -2)
 
     return canvas
 end
@@ -582,6 +881,8 @@ local function CreateMinimapButton()
             -- Force check
             dismissedThisSession = false
             RunCheck()
+        elseif IsShiftKeyDown() then
+            ShowConsortiumWindow()
         else
             OpenSettings()
         end
@@ -592,6 +893,7 @@ local function CreateMinimapButton()
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:AddLine("|cff00ff00Daily Reminder|r")
         GameTooltip:AddLine("|cffffffffLeft-click:|r Open settings", 1, 1, 1)
+        GameTooltip:AddLine("|cffffffffShift-click:|r Consortium status", 1, 1, 1)
         GameTooltip:AddLine("|cffffffffRight-click:|r Check dailies now", 1, 1, 1)
         GameTooltip:AddLine("|cffffffffDrag:|r Move this button", 0.7, 0.7, 0.7)
         GameTooltip:Show()
@@ -672,6 +974,8 @@ SlashCmdList["DAILYREMINDER"] = function(msg)
             minimapButton:Show()
             DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[Daily Reminder]|r Minimap button shown.")
         end
+    elseif cmd == "consortium" then
+        ShowConsortiumWindow()
     else
         OpenSettings()
     end
