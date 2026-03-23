@@ -38,20 +38,38 @@ local heroicDailies = {
 
 -- TBC PVP Dailies (Horde + Alliance)
 local pvpDailies = {
-    -- Horde
+    -- Horde (Battlegrounds)
     [11342] = "Call to Arms: Warsong Gulch",
     [11339] = "Call to Arms: Arathi Basin",
     [11340] = "Call to Arms: Alterac Valley",
     [11341] = "Call to Arms: Eye of the Storm",
     [13407] = "Call to Arms: Strand of the Ancients",
     [14164] = "Call to Arms: Isle of Conquest",
-    -- Alliance
+    -- Horde (World PVP)
+    [10110] = "Hellfire Fortifications",
+    [11506] = "Spirits of Auchindoun",
+    [11503] = "Enemies, Old and New",
+    -- Alliance (Battlegrounds)
     [11338] = "Call to Arms: Warsong Gulch",
     [11335] = "Call to Arms: Arathi Basin",
     [11336] = "Call to Arms: Alterac Valley",
     [11337] = "Call to Arms: Eye of the Storm",
     [13405] = "Call to Arms: Strand of the Ancients",
     [14163] = "Call to Arms: Isle of Conquest",
+    -- Alliance (World PVP)
+    [10106] = "Hellfire Fortifications",
+    [11505] = "Spirits of Auchindoun",
+    [11502] = "In Defense of Halaa",
+}
+
+-- Ogri'la / Sha'tari Skyguard Dailies
+local ogrilaDailies = {
+    [11080] = "The Relic's Emanation",
+    [11023] = "Bomb Them Again!",
+    [11066] = "Wrangle More Aether Rays!",
+    [11051] = "Banish More Demons",
+    [11008] = "Fires Over Skettis",
+    [11085] = "Escape from Skettis",
 }
 
 ------------------------------------------------------------
@@ -63,6 +81,11 @@ local defaults = {
     alertType = "POPUP", -- "CHAT", "RAID_WARNING", "POPUP"
     minimapAngle = 220,
     minimapHidden = false,
+    checkDungeons = true,
+    checkHeroics = true,
+    checkPVP = true,
+    checkOgrila = true,
+    firstRun = true,
 }
 
 local soundOptions = {
@@ -178,6 +201,90 @@ local function ShowPopup(lines)
 end
 
 ------------------------------------------------------------
+-- First-Run Setup Popup
+------------------------------------------------------------
+
+local setupFrame
+
+local function CreateSetupFrame()
+    if setupFrame then return setupFrame end
+
+    local f = CreateFrame("Frame", "DailyReminderSetupPopup", UIParent, "BackdropTemplate")
+    f:SetSize(400, 320)
+    f:SetPoint("CENTER")
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    f:SetFrameStrata("DIALOG")
+
+    f:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 32,
+        insets = { left = 8, right = 8, top = 8, bottom = 8 },
+    })
+
+    -- Title
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", 0, -16)
+    title:SetText("|cff00ff00Daily Reminder — First Time Setup|r")
+
+    -- Description
+    local desc = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    desc:SetPoint("TOP", title, "BOTTOM", 0, -8)
+    desc:SetPoint("LEFT", 20, 0)
+    desc:SetPoint("RIGHT", -20, 0)
+    desc:SetJustifyH("LEFT")
+    desc:SetText("Welcome! Choose which daily categories you want to track.\nYou can change these later in the addon settings.")
+
+    -- Checkbox helper
+    local checkboxes = {}
+    local function CreateSetupCheckbox(parent, labelText, dbKey, anchor, offsetY)
+        local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+        cb:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, offsetY or -6)
+        cb.text = cb:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        cb.text:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+        cb.text:SetText(labelText)
+        cb:SetChecked(DailyReminderDB[dbKey])
+        cb.dbKey = dbKey
+        table.insert(checkboxes, cb)
+        return cb
+    end
+
+    local cb1 = CreateSetupCheckbox(f, "Dungeon Dailies (Normal)",        "checkDungeons", desc, -8)
+    local cb2 = CreateSetupCheckbox(f, "Heroic Dungeon Dailies",          "checkHeroics",  cb1, -4)
+    local cb3 = CreateSetupCheckbox(f, "PVP Dailies (Battlegrounds & World)", "checkPVP",  cb2, -4)
+    local cb4 = CreateSetupCheckbox(f, "Ogri'la / Sha'tari Skyguard Dailies", "checkOgrila", cb3, -4)
+
+    -- Save button
+    local saveBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    saveBtn:SetSize(140, 26)
+    saveBtn:SetPoint("BOTTOM", 0, 16)
+    saveBtn:SetText("Save & Continue")
+    saveBtn:SetScript("OnClick", function()
+        for _, cb in ipairs(checkboxes) do
+            DailyReminderDB[cb.dbKey] = cb:GetChecked() and true or false
+        end
+        DailyReminderDB.firstRun = false
+        f:Hide()
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[Daily Reminder]|r Setup complete! Use |cffffff00/dr|r to adjust settings anytime.")
+        -- Run initial check after setup
+        C_Timer.After(2, RunCheck)
+    end)
+
+    f:Hide()
+    setupFrame = f
+    return f
+end
+
+local function ShowFirstRunSetup()
+    local f = CreateSetupFrame()
+    f:Show()
+end
+
+------------------------------------------------------------
 -- Core Check Logic
 ------------------------------------------------------------
 
@@ -215,16 +322,19 @@ local function RunCheck()
     local completed = GetCompletedQuestIDs()
     local results = {}
 
-    -- Check each daily table against completed quests
+    -- Check each daily table against completed quests (only if enabled)
     local dailyTables = {
-        { table = dungeonDailies, category = "Dungeon" },
-        { table = heroicDailies,  category = "Heroic" },
-        { table = pvpDailies,     category = "PVP" },
+        { table = dungeonDailies, category = "Dungeon",                  enabled = DailyReminderDB.checkDungeons },
+        { table = heroicDailies,  category = "Heroic",                   enabled = DailyReminderDB.checkHeroics },
+        { table = pvpDailies,     category = "PVP",                      enabled = DailyReminderDB.checkPVP },
+        { table = ogrilaDailies,  category = "Ogri'la / Sha'tari Skyguard", enabled = DailyReminderDB.checkOgrila },
     }
     for _, dt in ipairs(dailyTables) do
-        for questID, questName in pairs(dt.table) do
-            if completed[questID] then
-                table.insert(results, { category = dt.category, name = questName })
+        if dt.enabled then
+            for questID, questName in pairs(dt.table) do
+                if completed[questID] then
+                    table.insert(results, { category = dt.category, name = questName })
+                end
             end
         end
     end
@@ -367,6 +477,29 @@ local function CreateSettingsCanvas()
         dismissedThisSession = saved
     end)
 
+    -- Category toggles section
+    local catHeader = canvas:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    catHeader:SetPoint("TOPLEFT", testBtn, "BOTTOMLEFT", 0, -24)
+    catHeader:SetText("Tracked Categories:")
+
+    local function CreateSettingsCheckbox(parent, labelText, dbKey, anchor, offsetY)
+        local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+        cb:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, offsetY or -6)
+        cb.text = cb:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        cb.text:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+        cb.text:SetText(labelText)
+        cb:SetChecked(DailyReminderDB[dbKey])
+        cb:SetScript("OnClick", function(self)
+            DailyReminderDB[dbKey] = self:GetChecked() and true or false
+        end)
+        return cb
+    end
+
+    local sCb1 = CreateSettingsCheckbox(canvas, "Dungeon Dailies (Normal)",             "checkDungeons", catHeader, -4)
+    local sCb2 = CreateSettingsCheckbox(canvas, "Heroic Dungeon Dailies",               "checkHeroics",  sCb1, -2)
+    local sCb3 = CreateSettingsCheckbox(canvas, "PVP Dailies (Battlegrounds & World)",  "checkPVP",      sCb2, -2)
+    local sCb4 = CreateSettingsCheckbox(canvas, "Ogri'la / Sha'tari Skyguard Dailies",  "checkOgrila",   sCb3, -2)
+
     return canvas
 end
 
@@ -494,6 +627,10 @@ local function OnEvent(self, event, arg1)
         -- Register into WoW addon settings tab
         RegisterSettings()
         DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[Daily Reminder]|r Loaded. Type |cffffff00/dr|r or open Game Menu > Options > AddOns.")
+        -- Show first-run setup if this is a fresh install
+        if DailyReminderDB.firstRun then
+            C_Timer.After(3, ShowFirstRunSetup)
+        end
         self:UnregisterEvent("ADDON_LOADED")
         return
     end

@@ -4,9 +4,11 @@ A lightweight World of Warcraft addon that reminds you to turn in completed dail
 
 ## Features
 
-- **Automatic detection** of completed dungeon, heroic, and PvP dailies
+- **First-time setup wizard** — on first install, a popup lets you pick which daily categories to track
+- **Automatic detection** of completed dungeon, heroic, PvP, and Ogri'la / Sha'tari Skyguard dailies
 - **Multiple alert types** — chat message, raid warning text, or popup window
 - **Configurable sound alerts** — choose from several built-in sounds or disable them
+- **Category toggles** — enable or disable tracking per category at any time
 - **Minimap button** — left-click to open settings, right-click to check dailies on demand
 - **Session dismiss** — silence reminders until your next login
 
@@ -16,7 +18,8 @@ A lightweight World of Warcraft addon that reminds you to turn in completed dail
 |----------|--------|
 | Dungeon  | Shattered Halls, Coilfang, Botanica, Arcatraz, and more |
 | Heroic   | All TBC heroic dungeon dailies including Magister's Terrace |
-| PvP      | Call to Arms dailies (Horde & Alliance) |
+| PvP      | Call to Arms battleground dailies + world PvP (Hellfire, Terokkar, Nagrand) for both factions |
+| Ogri'la / Sha'tari Skyguard | The Relic's Emanation, Bomb Them Again!, Wrangle More Aether Rays!, Banish More Demons, Fires Over Skettis, Escape from Skettis |
 
 ## Slash Commands
 

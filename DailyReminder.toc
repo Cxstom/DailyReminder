@@ -1,8 +1,8 @@
 ## Interface: 20505
 ## Title: Daily Reminder
-## Notes: Reminds you to turn in completed TBC daily quests (Normal, Heroic, PVP)
+## Notes: Reminds you to turn in completed TBC daily quests (Normal, Heroic, PVP, Ogri'la / Sha'tari Skyguard)
 ## Author: DailyReminder
-## Version: 1.1
+## Version: 1.2
 ## SavedVariables: DailyReminderDB
 
 DailyReminder.lua
