@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.6
+- **Per-category alert systems**: Quests, Consortium, and Professions now each have fully independent alert configurations (sound, alert type) instead of a single unified setting.
+- **Master quest toggle**: New "Enable Quest Tracking" checkbox lets users disable all quest tracking at once without unchecking each category individually.
+- **Visual disable effect**: When a category master toggle is unchecked, all its sub-checkboxes are grayed out and disabled for visual clarity.
+- **Quest alert triggers**: Users can toggle two triggers independently — *Login / Reload* and *Leaving an Instance* (dungeon or battleground). Zone changes during flight paths no longer trigger alerts.
+- **Professions alert system**: Professions now have their own independent alert configuration with separate sound, alert type, trigger toggles, and dismiss state.
+- **Consortium reminder window**: New `consortiumReminderDays` slider (1–28 days) controls how many days before the month ends Consortium alerts start firing, so players actively levelling the reputation aren't spammed.
+- Consortium alerts fire **only on login**, never on zone changes.
+- Each alert category has its own **popup window**, **dismiss state**, and **Test Alert** button in the settings panel.
+- **Compact settings layout**: Sound, Alert Type, and Test Alert controls are now on the same horizontal row, saving vertical space.
+- **Scrollable settings tabs**: Each settings tab now has its own scroll frame to prevent content from overflowing outside the panel.
+- **Slider visual fix**: The reminder-days slider now uses explicitly set textures for reliable rendering in Classic TBC.
+- Redesigned the **settings panel** with a tab-based layout: Quests, Consortium, and Professions tabs.
+- Reworked the **first-run setup wizard** with section headers, separators, and less redundant labels.
+- Unified **dark opaque background** across all popup frames (alert popup, setup wizard, Consortium window) for visual consistency.
+- Automatic **migration** of saved settings from v1.5's unified `sound`/`alertType` to the new per-category keys.
+
 ## v1.5
 - Added **Profession Cooldowns** tracking across all characters: Tailoring cloths (Primal Mooncloth, Spellcloth, Shadowcloth), Alchemy transmutes (all Primal and Diamond transmutes with shared cooldown support), and Leatherworking (Salt Shaker).
 - New cross-character **Profession Cooldowns window** (same table style as Consortium) showing character, profession, cooldown name, and time remaining with color-coded urgency.

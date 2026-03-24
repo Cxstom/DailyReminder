@@ -129,10 +129,24 @@ end
 ------------------------------------------------------------
 
 local defaults = {
-    sound = "RAID_WARNING",
-    alertType = "POPUP", -- "CHAT", "RAID_WARNING", "POPUP"
+    -- Quest alert settings
+    questSound = "RAID_WARNING",
+    questAlertType = "POPUP", -- "CHAT", "RAID_WARNING", "POPUP"
+    questTriggerLogin = true,
+    questTriggerInstanceLeave = true,
+    -- Consortium alert settings
+    consortiumSound = "RAID_WARNING",
+    consortiumAlertType = "POPUP", -- "CHAT", "RAID_WARNING", "POPUP"
+    consortiumReminderDays = 7,
+    -- Professions alert settings
+    professionsSound = "RAID_WARNING",
+    professionsAlertType = "POPUP", -- "CHAT", "RAID_WARNING", "POPUP"
+    professionsTriggerLogin = true,
+    professionsTriggerInstanceLeave = true,
+    -- General
     minimapAngle = 220,
     minimapHidden = false,
+    checkQuests = true,
     checkDungeons = true,
     checkHeroics = true,
     checkPVP = true,
@@ -160,8 +174,13 @@ local alertOptions = {
     { key = "POPUP",         label = "Popup Window" },
 }
 
--- Session-only flag: once the user dismisses the popup, stop reminding
-local dismissedThisSession = false
+-- Session-only dismiss flags (per-category)
+local questDismissedThisSession = false
+local consortiumDismissedThisSession = false
+local professionsDismissedThisSession = false
+
+-- Instance tracking for "leave instance" trigger detection
+local wasInInstance = false
 
 ------------------------------------------------------------
 -- Sound Playback
@@ -176,25 +195,20 @@ local soundMap = {
     MALACRASS_WARN = 12057,
 }
 
-local function PlayChosenSound()
-    local key = DailyReminderDB.sound
-    if key == "NONE" then return end
-    local id = soundMap[key]
+local function PlayAlertSound(soundKey)
+    if not soundKey or soundKey == "NONE" then return end
+    local id = soundMap[soundKey]
     if id then
         PlaySound(id)
     end
 end
 
 ------------------------------------------------------------
--- Popup Frame
+-- Alert Popup Frames (one per category)
 ------------------------------------------------------------
 
-local popupFrame
-
-local function CreatePopupFrame()
-    if popupFrame then return popupFrame end
-
-    local f = CreateFrame("Frame", "DailyReminderPopup", UIParent, "BackdropTemplate")
+local function CreateAlertPopupFrame(frameName, titleText, onDismiss)
+    local f = CreateFrame("Frame", frameName, UIParent, "BackdropTemplate")
     f:SetSize(360, 200)
     f:SetPoint("CENTER")
     f:SetMovable(true)
@@ -205,15 +219,16 @@ local function CreatePopupFrame()
     f:SetFrameStrata("DIALOG")
 
     f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
         tile = true, tileSize = 32, edgeSize = 32,
         insets = { left = 8, right = 8, top = 8, bottom = 8 },
     })
+    f:SetBackdropColor(0.1, 0.1, 0.1, 0.95)
 
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", 0, -16)
-    title:SetText("|cff00ff00Daily Reminder|r")
+    title:SetText(titleText)
 
     local body = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     body:SetPoint("TOP", title, "BOTTOM", 0, -10)
@@ -236,28 +251,67 @@ local function CreatePopupFrame()
     dismissBtn:SetPoint("BOTTOMLEFT", 16, 14)
     dismissBtn:SetText("Don't remind this session")
     dismissBtn:SetScript("OnClick", function()
-        dismissedThisSession = true
+        if onDismiss then onDismiss() end
         f:Hide()
         DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[Daily Reminder]|r Reminders paused for this session. Type |cffffff00/dr resume|r to re-enable.")
     end)
 
     f:Hide()
-    popupFrame = f
     return f
 end
 
-local function ShowPopup(lines)
-    local f = CreatePopupFrame()
-    -- Resize height based on content
+-- Quest alert popup
+local questPopupFrame
+
+local function ShowQuestPopup(lines)
+    if not questPopupFrame then
+        questPopupFrame = CreateAlertPopupFrame("DailyReminderQuestPopup",
+            "|cff00ff00Daily Reminder — Quests|r",
+            function() questDismissedThisSession = true end)
+    end
     local text = table.concat(lines, "\n")
-    f.body:SetText(text)
-    local textHeight = f.body:GetStringHeight()
-    f:SetHeight(math.max(140, textHeight + 90))
-    f:Show()
+    questPopupFrame.body:SetText(text)
+    local textHeight = questPopupFrame.body:GetStringHeight()
+    questPopupFrame:SetHeight(math.max(140, textHeight + 90))
+    questPopupFrame:Show()
+end
+
+-- Consortium alert popup
+local consortiumAlertPopupFrame
+
+local function ShowConsortiumAlertPopup(lines)
+    if not consortiumAlertPopupFrame then
+        consortiumAlertPopupFrame = CreateAlertPopupFrame("DailyReminderConsortiumAlertPopup",
+            "|cff00ff00Daily Reminder — Consortium|r",
+            function() consortiumDismissedThisSession = true end)
+    end
+    local text = table.concat(lines, "\n")
+    consortiumAlertPopupFrame.body:SetText(text)
+    local textHeight = consortiumAlertPopupFrame.body:GetStringHeight()
+    consortiumAlertPopupFrame:SetHeight(math.max(140, textHeight + 90))
+    consortiumAlertPopupFrame:Show()
+end
+
+-- Professions alert popup
+local professionsAlertPopupFrame
+
+local function ShowProfessionsAlertPopup(lines)
+    if not professionsAlertPopupFrame then
+        professionsAlertPopupFrame = CreateAlertPopupFrame("DailyReminderProfessionsAlertPopup",
+            "|cff00ff00Daily Reminder — Professions|r",
+            function() professionsDismissedThisSession = true end)
+    end
+    local text = table.concat(lines, "\n")
+    professionsAlertPopupFrame.body:SetText(text)
+    local textHeight = professionsAlertPopupFrame.body:GetStringHeight()
+    professionsAlertPopupFrame:SetHeight(math.max(140, textHeight + 90))
+    professionsAlertPopupFrame:Show()
 end
 
 -- Forward declarations (defined later, referenced in callbacks above their definition)
-local RunCheck
+local RunQuestCheck
+local RunConsortiumCheck
+local RunProfessionsCheck
 local ShowConsortiumWindow
 local ShowProfessionsWindow
 local RefreshProfessionsWindow
@@ -273,7 +327,7 @@ local function CreateSetupFrame()
     if setupFrame then return setupFrame end
 
     local f = CreateFrame("Frame", "DailyReminderSetupPopup", UIParent, "BackdropTemplate")
-    f:SetSize(400, 430)
+    f:SetSize(380, 270)
     f:SetPoint("CENTER")
     f:SetMovable(true)
     f:EnableMouse(true)
@@ -283,32 +337,34 @@ local function CreateSetupFrame()
     f:SetFrameStrata("DIALOG")
 
     f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
         tile = true, tileSize = 32, edgeSize = 32,
         insets = { left = 8, right = 8, top = 8, bottom = 8 },
     })
+    f:SetBackdropColor(0.1, 0.1, 0.1, 0.95)
 
     -- Title
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOP", 0, -16)
     title:SetText("|cff00ff00Daily Reminder — First Time Setup|r")
 
     -- Description
-    local desc = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    desc:SetPoint("TOP", title, "BOTTOM", 0, -8)
+    local desc = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    desc:SetPoint("TOP", title, "BOTTOM", 0, -6)
     desc:SetPoint("LEFT", 20, 0)
     desc:SetPoint("RIGHT", -20, 0)
     desc:SetJustifyH("LEFT")
-    desc:SetText("Welcome! Choose which daily categories you want to track.\nYou can change these later in the addon settings.")
+    desc:SetText("Welcome! Choose which categories you want to track.\nYou can change these later in the addon settings.")
 
-    -- Checkbox helper
+    -- Helpers (smaller fonts for compact wizard)
     local checkboxes = {}
-    local function CreateSetupCheckbox(parent, labelText, dbKey, anchor, offsetY)
+    local function CreateSetupCheckbox(parent, labelText, dbKey, anchor, offsetY, fontObj)
         local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-        cb:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, offsetY or -6)
-        cb.text = cb:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        cb.text:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+        cb:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, offsetY or -2)
+        cb:SetSize(22, 22)
+        cb.text = cb:CreateFontString(nil, "OVERLAY", fontObj or "GameFontHighlightSmall")
+        cb.text:SetPoint("LEFT", cb, "RIGHT", 2, 0)
         cb.text:SetText(labelText)
         cb:SetChecked(DailyReminderDB[dbKey])
         cb.dbKey = dbKey
@@ -316,18 +372,107 @@ local function CreateSetupFrame()
         return cb
     end
 
-    local cb1 = CreateSetupCheckbox(f, "Dungeon Dailies (Normal)",        "checkDungeons", desc, -8)
-    local cb2 = CreateSetupCheckbox(f, "Heroic Dungeon Dailies",          "checkHeroics",  cb1, -4)
-    local cb3 = CreateSetupCheckbox(f, "PVP Dailies (Battlegrounds & World)", "checkPVP",  cb2, -4)
-    local cb4 = CreateSetupCheckbox(f, "Ogri'la / Sha'tari Skyguard Dailies", "checkOgrila", cb3, -4)
-    local cb5 = CreateSetupCheckbox(f, "Cooking Dailies",                      "checkCooking", cb4, -4)
-    local cb6 = CreateSetupCheckbox(f, "Fishing Dailies",                      "checkFishing", cb5, -4)
-    local cb7 = CreateSetupCheckbox(f, "Consortium Monthly Quest",             "checkConsortium", cb6, -4)
-    local cb8 = CreateSetupCheckbox(f, "Profession Cooldowns",                  "checkProfessions", cb7, -4)
+    local function CreateSectionHeader(parent, text, anchor, offsetY)
+        local header = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        header:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, offsetY or -12)
+        header:SetText("|cffffff00" .. text .. "|r")
+
+        local sep = parent:CreateTexture(nil, "ARTWORK")
+        sep:SetColorTexture(0.5, 0.5, 0.5, 0.5)
+        sep:SetSize(330, 1)
+        sep:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 0, -2)
+
+        return sep
+    end
+
+    -- === Section 1: Quests ===
+    local sec1 = CreateSectionHeader(f, "Quests", desc, -10)
+    local cbMasterQ = CreateSetupCheckbox(f, "Enable quest turn-in tracking", "checkQuests", sec1, -2, "GameFontNormalSmall")
+
+    -- Collapse toggle for quest sub-categories
+    local questSubsCollapsed = true
+    local questSubsContainer = CreateFrame("Frame", nil, f)
+    questSubsContainer:SetPoint("TOPLEFT", cbMasterQ, "BOTTOMLEFT", 16, 0)
+    questSubsContainer:SetSize(300, 1)
+    questSubsContainer:Hide()
+
+    -- Anchor inside the container
+    local subAnchor = questSubsContainer:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    subAnchor:SetPoint("TOPLEFT", 0, 0)
+    subAnchor:SetText("")
+    subAnchor:SetHeight(1)
+
+    local cb1 = CreateSetupCheckbox(questSubsContainer, "Dungeons (Normal)",           "checkDungeons", subAnchor, -2)
+    local cb2 = CreateSetupCheckbox(questSubsContainer, "Heroics",                     "checkHeroics",  cb1, -1)
+    local cb3 = CreateSetupCheckbox(questSubsContainer, "PVP (Battlegrounds & World)", "checkPVP",      cb2, -1)
+    local cb4 = CreateSetupCheckbox(questSubsContainer, "Ogri'la / Sha'tari Skyguard", "checkOgrila",   cb3, -1)
+    local cb5 = CreateSetupCheckbox(questSubsContainer, "Cooking",                     "checkCooking",  cb4, -1)
+    local cb6 = CreateSetupCheckbox(questSubsContainer, "Fishing",                     "checkFishing",  cb5, -1)
+
+    local questSubsHeight = 6 * 23  -- 6 checkboxes × ~23px each
+
+    -- Toggle button (+/-)
+    local toggleBtn = CreateFrame("Button", nil, f)
+    toggleBtn:SetSize(16, 16)
+    toggleBtn:SetPoint("LEFT", cbMasterQ.text, "RIGHT", 6, 0)
+    local toggleIcon = toggleBtn:CreateTexture(nil, "ARTWORK")
+    toggleIcon:SetAllPoints()
+    toggleIcon:SetTexture("Interface\\Buttons\\UI-PlusButton-UP")
+    local toggleHL = toggleBtn:CreateTexture(nil, "HIGHLIGHT")
+    toggleHL:SetAllPoints()
+    toggleHL:SetTexture("Interface\\Buttons\\UI-PlusButton-Hilight")
+    toggleHL:SetBlendMode("ADD")
+
+    -- Spacer below the master checkbox — its height changes based on collapse state
+    local questSpacer = CreateFrame("Frame", nil, f)
+    questSpacer:SetPoint("TOPLEFT", cbMasterQ, "BOTTOMLEFT", 0, 0)
+    questSpacer:SetSize(1, 1)
+
+    local function UpdateQuestCollapse()
+        if questSubsCollapsed then
+            questSubsContainer:Hide()
+            questSpacer:SetHeight(1)
+            toggleIcon:SetTexture("Interface\\Buttons\\UI-PlusButton-UP")
+        else
+            questSubsContainer:Show()
+            questSpacer:SetHeight(questSubsHeight)
+            toggleIcon:SetTexture("Interface\\Buttons\\UI-MinusButton-UP")
+        end
+        -- Resize the frame
+        local baseHeight = 270
+        local extraHeight = questSubsCollapsed and 0 or questSubsHeight
+        f:SetHeight(baseHeight + extraHeight)
+    end
+
+    toggleBtn:SetScript("OnClick", function()
+        questSubsCollapsed = not questSubsCollapsed
+        UpdateQuestCollapse()
+    end)
+
+    -- Visual enable/disable for quest sub-checkboxes
+    local questSetupSubs = { cb1, cb2, cb3, cb4, cb5, cb6 }
+    local function UpdateSetupQuestSubs()
+        local on = cbMasterQ:GetChecked()
+        for _, cb in ipairs(questSetupSubs) do
+            if on then cb:Enable(); cb.text:SetTextColor(0.8, 0.8, 0.8)
+            else       cb:Disable(); cb.text:SetTextColor(0.4, 0.4, 0.4) end
+        end
+    end
+    cbMasterQ:HookScript("OnClick", UpdateSetupQuestSubs)
+    UpdateSetupQuestSubs()
+    UpdateQuestCollapse()
+
+    -- === Section 2: Consortium ===
+    local sec2 = CreateSectionHeader(f, "Consortium", questSpacer, -10)
+    local cb7 = CreateSetupCheckbox(f, "Monthly Quest",    "checkConsortium",  sec2, -2, "GameFontNormalSmall")
+
+    -- === Section 3: Professions ===
+    local sec3 = CreateSectionHeader(f, "Professions", cb7, -10)
+    local cb8 = CreateSetupCheckbox(f, "Cooldown Tracking", "checkProfessions", sec3, -2, "GameFontNormalSmall")
 
     -- Save button
     local saveBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    saveBtn:SetSize(140, 26)
+    saveBtn:SetSize(140, 24)
     saveBtn:SetPoint("BOTTOM", 0, 16)
     saveBtn:SetText("Save & Continue")
     saveBtn:SetScript("OnClick", function()
@@ -338,7 +483,9 @@ local function CreateSetupFrame()
         f:Hide()
         DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[Daily Reminder]|r Setup complete! Use |cffffff00/dr|r to adjust settings anytime.")
         -- Run initial check after setup
-        C_Timer.After(2, RunCheck)
+        C_Timer.After(2, RunQuestCheck)
+        C_Timer.After(4, RunConsortiumCheck)
+        C_Timer.After(3, RunProfessionsCheck)
     end)
 
     f:Hide()
@@ -473,6 +620,13 @@ local function UpdateConsortiumData()
     return status, questID, standingLabel
 end
 
+-- Calculate days remaining until the end of the current month
+local function GetDaysRemainingInMonth()
+    local t = date("*t")
+    local lastDay = date("*t", time({ year = t.year, month = t.month + 1, day = 0 }))
+    return lastDay.day - t.day
+end
+
 ------------------------------------------------------------
 -- Consortium Status Window
 ------------------------------------------------------------
@@ -493,11 +647,12 @@ local function CreateConsortiumFrame()
     f:SetFrameStrata("DIALOG")
 
     f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
         tile = true, tileSize = 32, edgeSize = 32,
         insets = { left = 8, right = 8, top = 8, bottom = 8 },
     })
+    f:SetBackdropColor(0.1, 0.1, 0.1, 0.95)
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -1192,7 +1347,9 @@ end
 -- Core Check Logic
 ------------------------------------------------------------
 
-local lastCheck = 0
+local lastQuestCheck = 0
+local lastConsortiumCheck = 0
+local lastProfessionsCheck = 0
 local THROTTLE_SECONDS = 5
 
 -- Scan the quest log once and return a set of {questID = true} for quests
@@ -1220,55 +1377,9 @@ local function GetCompletedQuestIDs()
     return completed
 end
 
-RunCheck = function()
-    if dismissedThisSession then return end
-
-    local completed = GetCompletedQuestIDs()
-    local results = {}
-
-    -- Check each daily table against completed quests (only if enabled)
-    local dailyTables = {
-        { table = dungeonDailies, category = "Dungeon",                      enabled = DailyReminderDB.checkDungeons },
-        { table = heroicDailies,  category = "Heroic",                       enabled = DailyReminderDB.checkHeroics },
-        { table = pvpDailies,     category = "PVP",                          enabled = DailyReminderDB.checkPVP },
-        { table = ogrilaDailies,  category = "Ogri'la / Sha'tari Skyguard", enabled = DailyReminderDB.checkOgrila },
-        { table = cookingDailies, category = "Cooking",                      enabled = DailyReminderDB.checkCooking },
-        { table = fishingDailies, category = "Fishing",                      enabled = DailyReminderDB.checkFishing },
-    }
-    for _, dt in ipairs(dailyTables) do
-        if dt.enabled then
-            for questID, questName in pairs(dt.table) do
-                if completed[questID] then
-                    table.insert(results, { category = dt.category, name = questName })
-                end
-            end
-        end
-    end
-
-    -- Check Consortium monthly quest (if enabled)
-    if DailyReminderDB.checkConsortium then
-        local status = UpdateConsortiumData()
-        if status == "available" then
-            table.insert(results, { category = "Consortium", name = "Membership Benefits (available to pick up)" })
-        elseif status == "ready" then
-            table.insert(results, { category = "Consortium", name = "Membership Benefits (ready to turn in)" })
-        end
-    end
-
-    -- Check profession cooldowns (if enabled)
-    if DailyReminderDB.checkProfessions then
-        local charKey = GetCharacterKey()
-        local activeCDs = GetCharCooldownSummary(charKey)
-        -- If there is tracked data but zero active cooldowns, all are ready
-        local charEntry = DailyReminderDB.professionCDs and DailyReminderDB.professionCDs[charKey]
-        if charEntry and charEntry.lastUpdated and #activeCDs == 0 then
-            table.insert(results, { category = "Professions", name = "All cooldowns ready" })
-        end
-    end
-
+-- Generic alert dispatch: fires sound and the chosen alert type
+local function FireAlert(results, soundKey, alertType, showPopupFn)
     if #results == 0 then return end
-
-    local alertType = DailyReminderDB.alertType
 
     if alertType == "CHAT" then
         for _, r in ipairs(results) do
@@ -1293,10 +1404,83 @@ RunCheck = function()
         for _, r in ipairs(results) do
             table.insert(lines, "|cffffff00" .. r.category .. ":|r " .. r.name)
         end
-        ShowPopup(lines)
+        showPopupFn(lines)
     end
 
-    PlayChosenSound()
+    PlayAlertSound(soundKey)
+end
+
+-- Quest + Profession check (uses quest alert settings)
+RunQuestCheck = function()
+    if questDismissedThisSession then return end
+    if not DailyReminderDB.checkQuests then return end
+
+    local completed = GetCompletedQuestIDs()
+    local results = {}
+
+    -- Check each daily table against completed quests (only if enabled)
+    local dailyTables = {
+        { table = dungeonDailies, category = "Dungeon",                      enabled = DailyReminderDB.checkDungeons },
+        { table = heroicDailies,  category = "Heroic",                       enabled = DailyReminderDB.checkHeroics },
+        { table = pvpDailies,     category = "PVP",                          enabled = DailyReminderDB.checkPVP },
+        { table = ogrilaDailies,  category = "Ogri'la / Sha'tari Skyguard", enabled = DailyReminderDB.checkOgrila },
+        { table = cookingDailies, category = "Cooking",                      enabled = DailyReminderDB.checkCooking },
+        { table = fishingDailies, category = "Fishing",                      enabled = DailyReminderDB.checkFishing },
+    }
+    for _, dt in ipairs(dailyTables) do
+        if dt.enabled then
+            for questID, questName in pairs(dt.table) do
+                if completed[questID] then
+                    table.insert(results, { category = dt.category, name = questName })
+                end
+            end
+        end
+    end
+
+    if #results == 0 then return end
+    FireAlert(results, DailyReminderDB.questSound, DailyReminderDB.questAlertType, ShowQuestPopup)
+end
+
+-- Consortium check (uses consortium alert settings, respects reminder-days threshold)
+RunConsortiumCheck = function()
+    if consortiumDismissedThisSession then return end
+    if not DailyReminderDB.checkConsortium then return end
+
+    -- Only alert when we are within the configured reminder window
+    local daysRemaining = GetDaysRemainingInMonth()
+    if daysRemaining > (DailyReminderDB.consortiumReminderDays or 7) then return end
+
+    local status = UpdateConsortiumData()
+    local results = {}
+
+    if status == "available" then
+        table.insert(results, { category = "Consortium", name = "Membership Benefits (available to pick up)" })
+    elseif status == "ready" then
+        table.insert(results, { category = "Consortium", name = "Membership Benefits (ready to turn in)" })
+    end
+
+    if #results == 0 then return end
+
+    -- Append days-remaining info
+    results[1].name = results[1].name .. "  |cffaaaaaa(" .. daysRemaining .. " days left this month)|r"
+
+    FireAlert(results, DailyReminderDB.consortiumSound, DailyReminderDB.consortiumAlertType, ShowConsortiumAlertPopup)
+end
+
+-- Profession cooldown check (uses professions alert settings)
+RunProfessionsCheck = function()
+    if professionsDismissedThisSession then return end
+    if not DailyReminderDB.checkProfessions then return end
+
+    local charKey = GetCharacterKey()
+    local activeCDs = GetCharCooldownSummary(charKey)
+    local charEntry = DailyReminderDB.professionCDs and DailyReminderDB.professionCDs[charKey]
+
+    if not charEntry or not charEntry.lastUpdated then return end
+    if #activeCDs > 0 then return end  -- still has active cooldowns
+
+    local results = { { category = "Professions", name = "All cooldowns ready" } }
+    FireAlert(results, DailyReminderDB.professionsSound, DailyReminderDB.professionsAlertType, ShowProfessionsAlertPopup)
 end
 
 ------------------------------------------------------------
@@ -1306,56 +1490,10 @@ end
 local settingsCategory
 local dropdownCounter = 0
 
--- Helper: create a proper UIDropDownMenu
-local function CreateOptionDropdown(parent, labelText, options, dbKey, anchorTo, offsetY)
-    dropdownCounter = dropdownCounter + 1
-
-    local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    if anchorTo then
-        -- Compensate for UIDropDownMenu's -16 left shift when chaining dropdowns
-        local xOff = anchorTo:GetObjectType() == "FontString" and 0 or 16
-        label:SetPoint("TOPLEFT", anchorTo, "BOTTOMLEFT", xOff, offsetY or -24)
-    else
-        label:SetPoint("TOPLEFT", 20, offsetY or -20)
-    end
-    label:SetText(labelText)
-
-    local name = "DailyReminderDropdown" .. dropdownCounter
-    local dropdown = CreateFrame("Frame", name, parent, "UIDropDownMenuTemplate")
-    dropdown:SetPoint("TOPLEFT", label, "BOTTOMLEFT", -16, -2)
-
-    local function GetLabel(key)
-        for _, opt in ipairs(options) do
-            if opt.key == key then return opt.label end
-        end
-        return key
-    end
-
-    UIDropDownMenu_SetWidth(dropdown, 180)
-    UIDropDownMenu_SetText(dropdown, GetLabel(DailyReminderDB[dbKey]))
-
-    UIDropDownMenu_Initialize(dropdown, function(self, level)
-        for _, opt in ipairs(options) do
-            local info = UIDropDownMenu_CreateInfo()
-            info.text = opt.label
-            info.value = opt.key
-            info.checked = (DailyReminderDB[dbKey] == opt.key)
-            info.func = function(btn)
-                DailyReminderDB[dbKey] = btn.value
-                UIDropDownMenu_SetText(dropdown, btn.value and GetLabel(btn.value) or opt.label)
-                CloseDropDownMenus()
-            end
-            UIDropDownMenu_AddButton(info, level)
-        end
-    end)
-
-    return dropdown
-end
-
 -- Build the canvas frame that lives inside the WoW settings panel
 local function CreateSettingsCanvas()
     local canvas = CreateFrame("Frame", "DailyReminderSettingsCanvas")
-    canvas:SetSize(600, 400)
+    canvas:SetSize(620, 500)
     canvas:Hide()
 
     -- Title
@@ -1365,50 +1503,78 @@ local function CreateSettingsCanvas()
 
     local subtitle = canvas:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
-    subtitle:SetText("Configure how you are reminded to turn in completed dailies.")
+    subtitle:SetText("Configure tracking, alerts and notifications.")
 
-    -- Sound dropdown
-    local soundDD = CreateOptionDropdown(canvas, "Sound:", soundOptions, "sound", subtitle, -18)
+    ------------------------------------------------------------------
+    -- Tab infrastructure (scrollable tabs)
+    ------------------------------------------------------------------
+    local tabScrolls = {}   -- scroll frames (shown / hidden)
+    local tabChildren = {}  -- scroll children (widgets go here)
+    local tabButtons = {}
+    local NUM_TABS = 3
 
-    -- Alert type dropdown
-    local alertDD = CreateOptionDropdown(canvas, "Alert Type:", alertOptions, "alertType", soundDD, -16)
+    local function SelectTab(index)
+        for i, sf in ipairs(tabScrolls) do sf:Hide() end
+        tabScrolls[index]:Show()
+        PanelTemplates_SetTab(canvas, index)
+    end
 
-    -- Test Alert button
-    local testBtn = CreateFrame("Button", nil, canvas, "UIPanelButtonTemplate")
-    testBtn:SetSize(120, 26)
-    testBtn:SetPoint("TOPLEFT", alertDD, "BOTTOMLEFT", 16, -20)
-    testBtn:SetText("Test Alert")
-    testBtn:SetScript("OnClick", function()
-        local saved = dismissedThisSession
-        dismissedThisSession = false
+    canvas.numTabs = NUM_TABS
+    local tabNames = { "Quests", "Consortium", "Professions" }
+    for i, name in ipairs(tabNames) do
+        local tab = CreateFrame("Button", "DailyReminderSettingsCanvasTab" .. i, canvas, "CharacterFrameTabButtonTemplate")
+        tab:SetText(name)
+        tab:SetID(i)
 
-        local alertType = DailyReminderDB.alertType
-        local testEntry = { category = "Heroic", name = "Wanted: Murmur's Whisper" }
-
-        if alertType == "CHAT" then
-            DEFAULT_CHAT_FRAME:AddMessage(
-                "|cff00ff00[Daily Reminder]|r " .. testEntry.category .. " quest ready to turn in: |cffffff00" .. testEntry.name .. "|r"
-            )
-        elseif alertType == "RAID_WARNING" then
-            DEFAULT_CHAT_FRAME:AddMessage(
-                "|cff00ff00[Daily Reminder]|r " .. testEntry.category .. " quest ready to turn in: |cffffff00" .. testEntry.name .. "|r"
-            )
-            RaidNotice_AddMessage(RaidWarningFrame,
-                testEntry.category .. " daily ready: " .. testEntry.name,
-                ChatTypeInfo["RAID_WARNING"])
-        elseif alertType == "POPUP" then
-            ShowPopup({ "|cffffff00" .. testEntry.category .. ":|r " .. testEntry.name })
+        if i == 1 then
+            tab:SetPoint("TOPLEFT", subtitle, "BOTTOMLEFT", -4, -16)
+        else
+            tab:SetPoint("LEFT", tabButtons[i - 1], "RIGHT", -16, 0)
         end
-        PlayChosenSound()
 
-        dismissedThisSession = saved
-    end)
+        tab:SetScript("OnClick", function() SelectTab(i) end)
+        PanelTemplates_TabResize(tab, 0)
+        tabButtons[i] = tab
 
-    -- Category toggles section
-    local catHeader = canvas:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    catHeader:SetPoint("TOPLEFT", testBtn, "BOTTOMLEFT", 0, -24)
-    catHeader:SetText("Tracked Categories:")
+        -- Scroll frame for this tab
+        local sf = CreateFrame("ScrollFrame", "DRSettingsScroll" .. i, canvas, "UIPanelScrollFrameTemplate")
+        sf:SetPoint("TOPLEFT", tabButtons[1], "BOTTOMLEFT", 0, -12)
+        sf:SetPoint("BOTTOMRIGHT", canvas, "BOTTOMRIGHT", -26, 10)
+        sf:Hide()
 
+        local child = CreateFrame("Frame", nil, sf)
+        child:SetWidth(560)
+        child:SetHeight(1) -- set later per-tab
+        sf:SetScrollChild(child)
+
+        tabScrolls[i] = sf
+        tabChildren[i] = child
+    end
+
+    PanelTemplates_SetNumTabs(canvas, NUM_TABS)
+    PanelTemplates_SetTab(canvas, 1)
+    tabScrolls[1]:Show()
+
+    -- Auto-hide scrollbar when content fits
+    local function FinalizeTab(tabIndex, contentHeight)
+        tabChildren[tabIndex]:SetHeight(contentHeight)
+        local bar = tabScrolls[tabIndex].ScrollBar or _G["DRSettingsScroll" .. tabIndex .. "ScrollBar"]
+        tabScrolls[tabIndex]:SetScript("OnShow", function(self)
+            if bar then
+                if contentHeight <= self:GetHeight() then bar:Hide() else bar:Show() end
+            end
+        end)
+        -- Run once immediately for the initially-visible tab
+        if tabIndex == 1 and bar then
+            C_Timer.After(0, function()
+                if tabScrolls[1]:IsShown() and contentHeight <= tabScrolls[1]:GetHeight() then bar:Hide() end
+            end)
+        end
+    end
+
+    ------------------------------------------------------------------
+    -- Shared helpers
+    ------------------------------------------------------------------
     local function CreateSettingsCheckbox(parent, labelText, dbKey, anchor, offsetY)
         local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
         cb:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, offsetY or -6)
@@ -1422,14 +1588,381 @@ local function CreateSettingsCanvas()
         return cb
     end
 
-    local sCb1 = CreateSettingsCheckbox(canvas, "Dungeon Dailies (Normal)",             "checkDungeons", catHeader, -4)
-    local sCb2 = CreateSettingsCheckbox(canvas, "Heroic Dungeon Dailies",               "checkHeroics",  sCb1, -2)
-    local sCb3 = CreateSettingsCheckbox(canvas, "PVP Dailies (Battlegrounds & World)",  "checkPVP",      sCb2, -2)
-    local sCb4 = CreateSettingsCheckbox(canvas, "Ogri'la / Sha'tari Skyguard Dailies",  "checkOgrila",     sCb3, -2)
-    local sCb5 = CreateSettingsCheckbox(canvas, "Cooking Dailies",                      "checkCooking",    sCb4, -2)
-    local sCb6 = CreateSettingsCheckbox(canvas, "Fishing Dailies",                      "checkFishing",    sCb5, -2)
-    local sCb7 = CreateSettingsCheckbox(canvas, "Consortium Monthly Quest",              "checkConsortium", sCb6, -2)
-    local sCb8 = CreateSettingsCheckbox(canvas, "Profession Cooldowns",                   "checkProfessions", sCb7, -2)
+    local function CreateSectionSep(parent, anchor, offsetY)
+        local sep = parent:CreateTexture(nil, "ARTWORK")
+        sep:SetColorTexture(0.4, 0.4, 0.4, 0.4)
+        sep:SetSize(520, 1)
+        sep:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, offsetY or -12)
+        return sep
+    end
+
+    -- Compact horizontal alert row: [Sound dropdown] [Alert Type dropdown] [Test Alert]
+    -- Returns an anchor frame whose BOTTOMLEFT marks the bottom of the row (~56 px tall)
+    local function CreateAlertRow(parent, soundDbKey, alertDbKey, testClickFn, anchor, offsetY)
+        -- Sound label + dropdown (left)
+        local soundLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        soundLabel:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, offsetY or -10)
+        soundLabel:SetText("Sound:")
+
+        dropdownCounter = dropdownCounter + 1
+        local soundDD = CreateFrame("Frame", "DailyReminderDropdown" .. dropdownCounter, parent, "UIDropDownMenuTemplate")
+        soundDD:SetPoint("TOPLEFT", soundLabel, "BOTTOMLEFT", -16, -2)
+        UIDropDownMenu_SetWidth(soundDD, 120)
+
+        local function GetSoundLabel(key)
+            for _, o in ipairs(soundOptions) do if o.key == key then return o.label end end
+            return key
+        end
+        UIDropDownMenu_SetText(soundDD, GetSoundLabel(DailyReminderDB[soundDbKey]))
+        UIDropDownMenu_Initialize(soundDD, function(_, level)
+            for _, opt in ipairs(soundOptions) do
+                local info = UIDropDownMenu_CreateInfo()
+                info.text = opt.label; info.value = opt.key
+                info.checked = (DailyReminderDB[soundDbKey] == opt.key)
+                info.func = function(btn)
+                    DailyReminderDB[soundDbKey] = btn.value
+                    UIDropDownMenu_SetText(soundDD, GetSoundLabel(btn.value))
+                    CloseDropDownMenus()
+                end
+                UIDropDownMenu_AddButton(info, level)
+            end
+        end)
+
+        -- Alert Type label + dropdown (middle)
+        local alertLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        alertLabel:SetPoint("TOPLEFT", soundLabel, "TOPLEFT", 190, 0)
+        alertLabel:SetText("Alert Type:")
+
+        dropdownCounter = dropdownCounter + 1
+        local alertDD = CreateFrame("Frame", "DailyReminderDropdown" .. dropdownCounter, parent, "UIDropDownMenuTemplate")
+        alertDD:SetPoint("TOPLEFT", alertLabel, "BOTTOMLEFT", -16, -2)
+        UIDropDownMenu_SetWidth(alertDD, 120)
+
+        local function GetAlertLabel(key)
+            for _, o in ipairs(alertOptions) do if o.key == key then return o.label end end
+            return key
+        end
+        UIDropDownMenu_SetText(alertDD, GetAlertLabel(DailyReminderDB[alertDbKey]))
+        UIDropDownMenu_Initialize(alertDD, function(_, level)
+            for _, opt in ipairs(alertOptions) do
+                local info = UIDropDownMenu_CreateInfo()
+                info.text = opt.label; info.value = opt.key
+                info.checked = (DailyReminderDB[alertDbKey] == opt.key)
+                info.func = function(btn)
+                    DailyReminderDB[alertDbKey] = btn.value
+                    UIDropDownMenu_SetText(alertDD, GetAlertLabel(btn.value))
+                    CloseDropDownMenus()
+                end
+                UIDropDownMenu_AddButton(info, level)
+            end
+        end)
+
+        -- Test Alert button (right)
+        local testBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+        testBtn:SetSize(100, 22)
+        testBtn:SetPoint("TOPLEFT", alertLabel, "TOPLEFT", 175, -16)
+        testBtn:SetText("Test Alert")
+        testBtn:SetScript("OnClick", testClickFn)
+
+        -- Return a clean anchor at x=0 (compensates for UIDropDownMenu's -16 left shift)
+        local rowAnchor = CreateFrame("Frame", nil, parent)
+        rowAnchor:SetSize(1, 1)
+        rowAnchor:SetPoint("TOPLEFT", soundDD, "BOTTOMLEFT", 16, 0)
+        return rowAnchor
+    end
+
+    -- Reusable test-alert callback builder
+    local function MakeTestFn(soundDbKey, alertDbKey, dismissRef, showPopupFn, testCategory, testName)
+        return function()
+            local saved = dismissRef()
+            local alertType = DailyReminderDB[alertDbKey]
+            local entry = { category = testCategory, name = testName }
+
+            if alertType == "CHAT" then
+                DEFAULT_CHAT_FRAME:AddMessage(
+                    "|cff00ff00[Daily Reminder]|r " .. entry.category .. " — |cffffff00" .. entry.name .. "|r")
+            elseif alertType == "RAID_WARNING" then
+                DEFAULT_CHAT_FRAME:AddMessage(
+                    "|cff00ff00[Daily Reminder]|r " .. entry.category .. " — |cffffff00" .. entry.name .. "|r")
+                RaidNotice_AddMessage(RaidWarningFrame,
+                    entry.category .. ": " .. entry.name, ChatTypeInfo["RAID_WARNING"])
+            elseif alertType == "POPUP" then
+                showPopupFn({ "|cffffff00" .. entry.category .. ":|r " .. entry.name })
+            end
+            PlayAlertSound(DailyReminderDB[soundDbKey])
+            saved() -- restore
+        end
+    end
+
+    -- Custom slider builder (explicit textures — works reliably in Classic TBC)
+    local function CreateCustomSlider(parent, sliderName, anchor, offsetY, minVal, maxVal, dbKey, formatFn)
+        local slider = CreateFrame("Slider", sliderName, parent, "BackdropTemplate")
+        slider:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 4, offsetY or -20)
+        slider:SetSize(200, 17)
+        slider:SetOrientation("HORIZONTAL")
+
+        slider:SetBackdrop({
+            bgFile   = "Interface\\Buttons\\UI-SliderBar-Background",
+            edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
+            tile = true, tileSize = 8, edgeSize = 8,
+            insets = { left = 3, right = 3, top = 6, bottom = 6 },
+        })
+
+        local thumb = slider:CreateTexture(nil, "ARTWORK")
+        thumb:SetTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
+        thumb:SetSize(32, 32)
+        slider:SetThumbTexture(thumb)
+
+        slider:SetMinMaxValues(minVal, maxVal)
+        slider:SetValueStep(1)
+        slider:SetObeyStepOnDrag(true)
+        slider:SetValue(DailyReminderDB[dbKey] or minVal)
+
+        local low = slider:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        low:SetPoint("TOPLEFT", slider, "BOTTOMLEFT", 0, -2)
+        low:SetText(minVal .. (minVal == 1 and " day" or " days"))
+
+        local high = slider:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        high:SetPoint("TOPRIGHT", slider, "BOTTOMRIGHT", 0, -2)
+        high:SetText(maxVal .. " days")
+
+        local text = slider:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        text:SetPoint("BOTTOM", slider, "TOP", 0, 2)
+        text:SetText(formatFn(DailyReminderDB[dbKey] or minVal))
+
+        slider:SetScript("OnValueChanged", function(self, value)
+            value = math.floor(value + 0.5)
+            DailyReminderDB[dbKey] = value
+            text:SetText(formatFn(value))
+        end)
+
+        return slider
+    end
+
+    -- Enable / disable a checkbox visually
+    local function SetCheckboxEnabled(cb, enabled)
+        if enabled then
+            cb:Enable()
+            cb.text:SetTextColor(1, 1, 1)
+        else
+            cb:Disable()
+            cb.text:SetTextColor(0.5, 0.5, 0.5)
+        end
+    end
+
+    ------------------------------------------------------------------
+    -- Tab 1: Quests
+    ------------------------------------------------------------------
+    local q = tabChildren[1]
+
+    -- Description
+    local qDesc = q:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    qDesc:SetPoint("TOPLEFT", 0, 0)
+    qDesc:SetPoint("RIGHT", -20, 0)
+    qDesc:SetJustifyH("LEFT")
+    qDesc:SetText("Track completed daily quests and get alerted when they are ready to turn in.")
+
+    -- Master toggle
+    local qMasterCb = CreateSettingsCheckbox(q, "Enable Quest Tracking", "checkQuests", qDesc, -10)
+
+    -- Sub-content indented under master toggle (16px indent mirrors consortium/professions visual)
+    -- Alert settings header
+    local alertHeader = q:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    alertHeader:SetPoint("TOPLEFT", qMasterCb, "BOTTOMLEFT", 16, -12)
+    alertHeader:SetText("Alerts")
+
+    -- Compact alert row (sound + type + test on same line)
+    local qAlertRow = CreateAlertRow(q, "questSound", "questAlertType",
+        MakeTestFn("questSound", "questAlertType",
+            function() local s = questDismissedThisSession; questDismissedThisSession = false; return function() questDismissedThisSession = s end end,
+            ShowQuestPopup, "Heroic", "Wanted: Murmur's Whisper"),
+        alertHeader)
+
+    -- Alert triggers
+    local trigSep = CreateSectionSep(q, qAlertRow, -12)
+
+    local trigHeader = q:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    trigHeader:SetPoint("TOPLEFT", trigSep, "BOTTOMLEFT", 0, -8)
+    trigHeader:SetText("Alert Triggers")
+
+    local trigCb1 = CreateSettingsCheckbox(q, "On Login / Reload",           "questTriggerLogin",         trigHeader, -4)
+    local trigCb2 = CreateSettingsCheckbox(q, "When Leaving an Instance (dungeon / battleground)", "questTriggerInstanceLeave", trigCb1, -2)
+
+    -- Quest category toggles (collapsible two-column layout)
+    local qSep = CreateSectionSep(q, trigCb2, -12)
+
+    local catHeader = q:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    catHeader:SetPoint("TOPLEFT", qSep, "BOTTOMLEFT", 0, -8)
+    catHeader:SetText("Tracked Quest Categories")
+
+    -- Collapse toggle (+/-)
+    local catCollapsed = false
+    local catToggle = CreateFrame("Button", nil, q)
+    catToggle:SetSize(16, 16)
+    catToggle:SetPoint("LEFT", catHeader, "RIGHT", 6, 0)
+    local catToggleIcon = catToggle:CreateTexture(nil, "ARTWORK")
+    catToggleIcon:SetAllPoints()
+    catToggleIcon:SetTexture("Interface\\Buttons\\UI-MinusButton-UP")
+    local catToggleHL = catToggle:CreateTexture(nil, "HIGHLIGHT")
+    catToggleHL:SetAllPoints()
+    catToggleHL:SetTexture("Interface\\Buttons\\UI-PlusButton-Hilight")
+    catToggleHL:SetBlendMode("ADD")
+
+    -- Container for the category checkboxes
+    local catContainer = CreateFrame("Frame", nil, q)
+    catContainer:SetPoint("TOPLEFT", catHeader, "BOTTOMLEFT", 0, 0)
+    catContainer:SetSize(500, 1)
+
+    -- Invisible anchor inside the container
+    local catAnchor = catContainer:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    catAnchor:SetPoint("TOPLEFT", 0, 0)
+    catAnchor:SetText("")
+    catAnchor:SetHeight(1)
+
+    -- Left column
+    local sCb1 = CreateSettingsCheckbox(catContainer, "Dungeons (Normal)",             "checkDungeons", catAnchor, -4)
+    local sCb2 = CreateSettingsCheckbox(catContainer, "Heroics",                       "checkHeroics",  sCb1, -2)
+    local sCb3 = CreateSettingsCheckbox(catContainer, "PVP (Battlegrounds & World)",   "checkPVP",      sCb2, -2)
+    local sCb4 = CreateSettingsCheckbox(catContainer, "Ogri'la / Sha'tari Skyguard",   "checkOgrila",   sCb3, -2)
+
+    -- Right column (aligned to left-column rows)
+    local sCb5 = CreateSettingsCheckbox(catContainer, "Cooking",  "checkCooking",  catAnchor, -4)
+    sCb5:ClearAllPoints()
+    sCb5:SetPoint("TOPLEFT", sCb1, "TOPLEFT", 260, 0)
+
+    local sCb6 = CreateSettingsCheckbox(catContainer, "Fishing",  "checkFishing",  catAnchor, -4)
+    sCb6:ClearAllPoints()
+    sCb6:SetPoint("TOPLEFT", sCb2, "TOPLEFT", 260, 0)
+
+    local function UpdateCatCollapse()
+        if catCollapsed then
+            catContainer:Hide()
+            catToggleIcon:SetTexture("Interface\\Buttons\\UI-PlusButton-UP")
+        else
+            catContainer:Show()
+            catToggleIcon:SetTexture("Interface\\Buttons\\UI-MinusButton-UP")
+        end
+    end
+
+    catToggle:SetScript("OnClick", function()
+        catCollapsed = not catCollapsed
+        UpdateCatCollapse()
+    end)
+    UpdateCatCollapse()
+
+    -- Visual enable/disable for quest sub-controls
+    local questSubCbs = { trigCb1, trigCb2, sCb1, sCb2, sCb3, sCb4, sCb5, sCb6 }
+    local function UpdateQuestEnabled()
+        local on = qMasterCb:GetChecked()
+        for _, cb in ipairs(questSubCbs) do SetCheckboxEnabled(cb, on) end
+    end
+    qMasterCb:HookScript("OnClick", UpdateQuestEnabled)
+    UpdateQuestEnabled()
+
+    FinalizeTab(1, 380)
+
+    ------------------------------------------------------------------
+    -- Tab 2: Consortium
+    ------------------------------------------------------------------
+    local c = tabChildren[2]
+
+    local cDesc = c:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    cDesc:SetPoint("TOPLEFT", 0, 0)
+    cDesc:SetPoint("RIGHT", -20, 0)
+    cDesc:SetJustifyH("LEFT")
+    cDesc:SetText("Track the monthly Membership Benefits quest from The Consortium.\nStatus is shared across all characters on the account.")
+
+    local cCb = CreateSettingsCheckbox(c, "Enable Consortium Monthly Quest tracking", "checkConsortium", cDesc, -10)
+
+    local cHint = c:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    cHint:SetPoint("TOPLEFT", cCb, "BOTTOMLEFT", 26, -6)
+    cHint:SetTextColor(0.6, 0.6, 0.6)
+    cHint:SetText("Open the status window with Shift-click on the minimap button or /dr consortium")
+
+    -- Consortium alert settings
+    local cAlertSep = CreateSectionSep(c, cHint, -12)
+
+    local cAlertHeader = c:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    cAlertHeader:SetPoint("TOPLEFT", cAlertSep, "BOTTOMLEFT", 0, -8)
+    cAlertHeader:SetText("Consortium Alerts")
+
+    local cAlertRow = CreateAlertRow(c, "consortiumSound", "consortiumAlertType",
+        MakeTestFn("consortiumSound", "consortiumAlertType",
+            function() local s = consortiumDismissedThisSession; consortiumDismissedThisSession = false; return function() consortiumDismissedThisSession = s end end,
+            ShowConsortiumAlertPopup, "Consortium", "Membership Benefits (available)  |cffaaaaaa(5 days left)|r"),
+        cAlertHeader)
+
+    -- Reminder-days slider
+    local cDaysSep = CreateSectionSep(c, cAlertRow, -12)
+
+    local cDaysHeader = c:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    cDaysHeader:SetPoint("TOPLEFT", cDaysSep, "BOTTOMLEFT", 0, -8)
+    cDaysHeader:SetText("Reminder Window")
+
+    local cDaysDesc = c:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    cDaysDesc:SetPoint("TOPLEFT", cDaysHeader, "BOTTOMLEFT", 0, -4)
+    cDaysDesc:SetPoint("RIGHT", -20, 0)
+    cDaysDesc:SetJustifyH("LEFT")
+    cDaysDesc:SetTextColor(0.8, 0.8, 0.8)
+    cDaysDesc:SetText("How many days before the month ends should reminders start?\nLower values = less spam while you're still levelling the reputation.")
+
+    local cDaysSlider = CreateCustomSlider(c, "DRConsortiumDaysSlider", cDaysDesc, -20, 1, 28,
+        "consortiumReminderDays",
+        function(v) return "Remind " .. v .. " days before month end" end)
+
+    FinalizeTab(2, 360)
+
+    ------------------------------------------------------------------
+    -- Tab 3: Professions
+    ------------------------------------------------------------------
+    local p = tabChildren[3]
+
+    local pDesc = p:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    pDesc:SetPoint("TOPLEFT", 0, 0)
+    pDesc:SetPoint("RIGHT", -20, 0)
+    pDesc:SetJustifyH("LEFT")
+    pDesc:SetText("Track profession cooldowns (Tailoring cloths, Alchemy transmutes,\nLeatherworking Salt Shaker) across all your characters.")
+
+    local pCb = CreateSettingsCheckbox(p, "Enable Profession Cooldown tracking", "checkProfessions", pDesc, -10)
+
+    local pHint = p:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    pHint:SetPoint("TOPLEFT", pCb, "BOTTOMLEFT", 26, -6)
+    pHint:SetTextColor(0.6, 0.6, 0.6)
+    pHint:SetText("Open the cooldowns window with Ctrl-click on the minimap button or /dr professions")
+
+    -- Professions alert settings
+    local pAlertSep = CreateSectionSep(p, pHint, -12)
+
+    local pAlertHeader = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    pAlertHeader:SetPoint("TOPLEFT", pAlertSep, "BOTTOMLEFT", 0, -8)
+    pAlertHeader:SetText("Professions Alerts")
+
+    local pAlertRow = CreateAlertRow(p, "professionsSound", "professionsAlertType",
+        MakeTestFn("professionsSound", "professionsAlertType",
+            function() local s = professionsDismissedThisSession; professionsDismissedThisSession = false; return function() professionsDismissedThisSession = s end end,
+            ShowProfessionsAlertPopup, "Professions", "All cooldowns ready"),
+        pAlertHeader)
+
+    -- Professions alert triggers
+    local pTrigSep = CreateSectionSep(p, pAlertRow, -12)
+
+    local pTrigHeader = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    pTrigHeader:SetPoint("TOPLEFT", pTrigSep, "BOTTOMLEFT", 0, -8)
+    pTrigHeader:SetText("Alert Triggers")
+
+    local pTrigCb1 = CreateSettingsCheckbox(p, "On Login / Reload",           "professionsTriggerLogin",         pTrigHeader, -4)
+    local pTrigCb2 = CreateSettingsCheckbox(p, "When Leaving an Instance (dungeon / battleground)", "professionsTriggerInstanceLeave", pTrigCb1, -2)
+
+    -- Visual enable/disable for professions sub-controls
+    local profSubCbs = { pTrigCb1, pTrigCb2 }
+    local function UpdateProfEnabled()
+        local on = pCb:GetChecked()
+        for _, cb in ipairs(profSubCbs) do SetCheckboxEnabled(cb, on) end
+    end
+    pCb:HookScript("OnClick", UpdateProfEnabled)
+    UpdateProfEnabled()
+
+    FinalizeTab(3, 360)
 
     return canvas
 end
@@ -1511,8 +2044,12 @@ local function CreateMinimapButton()
     btn:SetScript("OnClick", function(self, button)
         if button == "RightButton" then
             -- Force check
-            dismissedThisSession = false
-            RunCheck()
+            questDismissedThisSession = false
+            consortiumDismissedThisSession = false
+            professionsDismissedThisSession = false
+            RunQuestCheck()
+            C_Timer.After(0.5, RunConsortiumCheck)
+            C_Timer.After(1, RunProfessionsCheck)
         elseif IsShiftKeyDown() then
             ShowConsortiumWindow()
         elseif IsControlKeyDown() then
@@ -1551,6 +2088,19 @@ local function OnEvent(self, event, arg1, arg2, arg3)
         if not DailyReminderDB then
             DailyReminderDB = {}
         end
+        -- Migrate from unified alerts to per-category (v1.5 → v1.6)
+        if DailyReminderDB.sound and not DailyReminderDB.questSound then
+            DailyReminderDB.questSound = DailyReminderDB.sound
+            DailyReminderDB.consortiumSound = DailyReminderDB.sound
+            DailyReminderDB.professionsSound = DailyReminderDB.sound
+        end
+        if DailyReminderDB.alertType and not DailyReminderDB.questAlertType then
+            DailyReminderDB.questAlertType = DailyReminderDB.alertType
+            DailyReminderDB.consortiumAlertType = DailyReminderDB.alertType
+            DailyReminderDB.professionsAlertType = DailyReminderDB.alertType
+        end
+        DailyReminderDB.sound = nil
+        DailyReminderDB.alertType = nil
         for k, v in pairs(defaults) do
             if DailyReminderDB[k] == nil then
                 DailyReminderDB[k] = v
@@ -1601,18 +2151,64 @@ local function OnEvent(self, event, arg1, arg2, arg3)
         return
     end
 
-    -- Throttle (for PLAYER_ENTERING_WORLD / ZONE_CHANGED_NEW_AREA)
-    local now = GetTime()
-    if now - lastCheck < THROTTLE_SECONDS then return end
-    lastCheck = now
+    -- PLAYER_ENTERING_WORLD: fires on login, reload, and instance transitions
+    if event == "PLAYER_ENTERING_WORLD" then
+        local isLogin  = arg1  -- true on initial login
+        local isReload = arg2  -- true on /reload
 
-    C_Timer.After(2, RunCheck)
+        local inInstance = IsInInstance()
+        local justLeftInstance = wasInInstance and not inInstance
+        wasInInstance = inInstance
+
+        -- Throttle
+        local now = GetTime()
+        if now - lastQuestCheck < THROTTLE_SECONDS
+           and now - lastConsortiumCheck < THROTTLE_SECONDS
+           and now - lastProfessionsCheck < THROTTLE_SECONDS then return end
+
+        local loginEvent = isLogin or isReload
+
+        -- Quest triggers: login (if enabled) and/or instance-leave (if enabled)
+        if now - lastQuestCheck >= THROTTLE_SECONDS then
+            local shouldCheckQuests = false
+            if loginEvent and DailyReminderDB.questTriggerLogin then
+                shouldCheckQuests = true
+            end
+            if justLeftInstance and DailyReminderDB.questTriggerInstanceLeave then
+                shouldCheckQuests = true
+            end
+            if shouldCheckQuests then
+                lastQuestCheck = now
+                C_Timer.After(2, RunQuestCheck)
+            end
+        end
+
+        -- Consortium trigger: login only (days-before-month-end check is inside RunConsortiumCheck)
+        if loginEvent and now - lastConsortiumCheck >= THROTTLE_SECONDS then
+            lastConsortiumCheck = now
+            C_Timer.After(4, RunConsortiumCheck)
+        end
+
+        -- Professions triggers: login (if enabled) and/or instance-leave (if enabled)
+        if now - lastProfessionsCheck >= THROTTLE_SECONDS then
+            local shouldCheckProf = false
+            if loginEvent and DailyReminderDB.professionsTriggerLogin then
+                shouldCheckProf = true
+            end
+            if justLeftInstance and DailyReminderDB.professionsTriggerInstanceLeave then
+                shouldCheckProf = true
+            end
+            if shouldCheckProf then
+                lastProfessionsCheck = now
+                C_Timer.After(3, RunProfessionsCheck)
+            end
+        end
+    end
 end
 
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
-eventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 eventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 eventFrame:RegisterEvent("TRADE_SKILL_SHOW")
 eventFrame:SetScript("OnEvent", OnEvent)
@@ -1626,11 +2222,17 @@ SLASH_DAILYREMINDER2 = "/dailyreminder"
 SlashCmdList["DAILYREMINDER"] = function(msg)
     local cmd = strlower(strtrim(msg))
     if cmd == "resume" then
-        dismissedThisSession = false
+        questDismissedThisSession = false
+        consortiumDismissedThisSession = false
+        professionsDismissedThisSession = false
         DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[Daily Reminder]|r Reminders re-enabled for this session.")
     elseif cmd == "check" then
-        dismissedThisSession = false
-        RunCheck()
+        questDismissedThisSession = false
+        consortiumDismissedThisSession = false
+        professionsDismissedThisSession = false
+        RunQuestCheck()
+        C_Timer.After(0.5, RunConsortiumCheck)
+        C_Timer.After(1, RunProfessionsCheck)
     elseif cmd == "minimap" then
         DailyReminderDB.minimapHidden = not DailyReminderDB.minimapHidden
         if DailyReminderDB.minimapHidden then
