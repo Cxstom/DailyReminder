@@ -1,8 +1,8 @@
 ## Interface: 20505
 ## Title: Daily Reminder
-## Notes: Reminds you to turn in completed TBC daily quests and tracks Consortium monthly quest status
+## Notes: Reminds you to turn in completed TBC daily quests, tracks Consortium monthly quest status and profession cooldowns across all your characters
 ## Author: DailyReminder
-## Version: 1.4
+## Version: 1.5
 ## SavedVariables: DailyReminderDB
 
 DailyReminder.lua

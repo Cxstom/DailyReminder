@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.5
+- Added **Profession Cooldowns** tracking across all characters: Tailoring cloths (Primal Mooncloth, Spellcloth, Shadowcloth), Alchemy transmutes (all Primal and Diamond transmutes with shared cooldown support), and Leatherworking (Salt Shaker).
+- New cross-character **Profession Cooldowns window** (same table style as Consortium) showing character, profession, cooldown name, and time remaining with color-coded urgency.
+- Cooldowns are detected automatically via **spell cast** (`UNIT_SPELLCAST_SUCCEEDED`) and **trade skill window scan** (`TRADE_SKILL_SHOW`).
+- Access via **Ctrl-click** on the minimap button or `/dr professions`.
+- Toggleable in both the first-run setup wizard and the addon settings panel.
+
 ## v1.4
 - Added **Cooking Dailies** tracking (Shattrath cooking quests).
 - Added **Fishing Dailies** tracking (Shattrath fishing quests).
