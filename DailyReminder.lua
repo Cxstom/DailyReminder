@@ -116,12 +116,61 @@ local professionCooldowns = {
 
     -- Leatherworking (2 day 23 hour cooldown)
     [32748] = { name = "Salt Shaker", cd = 255600, profession = "Leatherworking" },
+
+    -- Jewelcrafting (20 hour cooldown)
+    [47280] = { name = "Brilliant Glass", cd = 72000, profession = "Jewelcrafting" },
+
+    -- Enchanting (48 hour cooldown)
+    [28028] = { name = "Void Sphere", cd = 172800, profession = "Enchanting" },
 }
 
 -- Reverse lookup: spell name → spellID
 local profCooldownByName = {}
 for spellID, data in pairs(professionCooldowns) do
     profCooldownByName[data.name] = spellID
+end
+
+-- Deduplicated trackable cooldown list (shared groups collapsed into one entry)
+-- Each entry: { key = "primal"|spellID, label = display name, profession = "Alchemy" }
+local trackableCooldowns = {}
+do
+    local seen = {}
+    for spellID, data in pairs(professionCooldowns) do
+        local key = data.shared or tostring(spellID)
+        if not seen[key] then
+            seen[key] = true
+            local label = data.name
+            if data.shared then
+                label = "Transmutes (shared CD)"
+            end
+            table.insert(trackableCooldowns, { key = key, label = label, profession = data.profession })
+        end
+    end
+    table.sort(trackableCooldowns, function(a, b)
+        if a.profession ~= b.profession then return a.profession < b.profession end
+        return a.label < b.label
+    end)
+end
+
+-- Per-character cooldown tracking preferences
+-- Defaults to true if no preference has been saved yet
+local function IsCooldownTracked(charKey, trackKey)
+    local prefs = DailyReminderDB and DailyReminderDB.profCDPrefs and DailyReminderDB.profCDPrefs[charKey]
+    if not prefs then return true end
+    if prefs[trackKey] == nil then return true end
+    return prefs[trackKey]
+end
+
+local function SetCooldownTracked(charKey, trackKey, enabled)
+    if not DailyReminderDB.profCDPrefs then DailyReminderDB.profCDPrefs = {} end
+    if not DailyReminderDB.profCDPrefs[charKey] then DailyReminderDB.profCDPrefs[charKey] = {} end
+    DailyReminderDB.profCDPrefs[charKey][trackKey] = enabled
+end
+
+local function GetTrackKeyForSpell(spellID)
+    local data = professionCooldowns[spellID]
+    if not data then return nil end
+    return data.shared or tostring(spellID)
 end
 
 ------------------------------------------------------------
@@ -210,7 +259,7 @@ end
 local function CreateAlertPopupFrame(frameName, titleText, onDismiss)
     local f = CreateFrame("Frame", frameName, UIParent, "BackdropTemplate")
     f:SetSize(360, 200)
-    f:SetPoint("CENTER")
+    f:SetPoint("TOP", UIParent, "TOP", 0, -100)
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
@@ -308,6 +357,244 @@ local function ShowProfessionsAlertPopup(lines)
     professionsAlertPopupFrame:Show()
 end
 
+-- Combined alert popup (used when multiple categories fire POPUP alerts)
+local combinedPopupFrame
+local combinedSectionPool = {}  -- reusable section UI elements
+
+-- Dismiss lookup: dismissKey → function that sets the session flag
+local dismissActions = {
+    quests      = function() questDismissedThisSession = true end,
+    consortium  = function() consortiumDismissedThisSession = true end,
+    professions = function() professionsDismissedThisSession = true end,
+}
+
+local function CreateCombinedPopupFrame()
+    if combinedPopupFrame then return combinedPopupFrame end
+
+    local f = CreateFrame("Frame", "DailyReminderCombinedPopup", UIParent, "BackdropTemplate")
+    f:SetSize(380, 200)
+    f:SetPoint("TOP", UIParent, "TOP", 0, -100)
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    f:SetFrameStrata("DIALOG")
+
+    f:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 32,
+        insets = { left = 8, right = 8, top = 8, bottom = 8 },
+    })
+    f:SetBackdropColor(0.1, 0.1, 0.1, 0.95)
+
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", 0, -16)
+    title:SetText("|cff00ff00Daily Reminder|r")
+    f.title = title
+
+    -- OK button (close)
+    local okBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    okBtn:SetSize(100, 24)
+    okBtn:SetPoint("BOTTOM", 0, 14)
+    okBtn:SetText("OK")
+    okBtn:SetScript("OnClick", function() f:Hide() end)
+
+    -- Content area where sections are placed
+    f.contentTop = -40  -- Y offset where first section starts
+
+    f:Hide()
+    combinedPopupFrame = f
+    return f
+end
+
+-- Get or create a section UI element from the pool
+local function GetCombinedSection(index)
+    if combinedSectionPool[index] then
+        return combinedSectionPool[index]
+    end
+
+    local f = CreateCombinedPopupFrame()
+    local sec = {}
+
+    -- Section header text
+    sec.header = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    sec.header:SetJustifyH("LEFT")
+
+    -- Dismiss button (× icon) to the right of the header
+    sec.dismissBtn = CreateFrame("Button", nil, f)
+    sec.dismissBtn:SetSize(16, 16)
+    local dTex = sec.dismissBtn:CreateTexture(nil, "ARTWORK")
+    dTex:SetAllPoints()
+    dTex:SetTexture("Interface\\Buttons\\UI-StopButton")
+    dTex:SetVertexColor(0.7, 0.3, 0.3)
+    sec.dismissBtn.icon = dTex
+    local dHL = sec.dismissBtn:CreateTexture(nil, "HIGHLIGHT")
+    dHL:SetAllPoints()
+    dHL:SetTexture("Interface\\Buttons\\UI-StopButton")
+    dHL:SetBlendMode("ADD")
+    dHL:SetAlpha(0.5)
+
+    -- Tooltip for the dismiss button
+    sec.dismissBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Don't remind this session", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    sec.dismissBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+
+    -- Body text for the section lines
+    sec.body = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    sec.body:SetJustifyH("LEFT")
+    sec.body:SetSpacing(2)
+
+    -- Strikethrough overlay (shown when dismissed)
+    sec.strikethrough = f:CreateTexture(nil, "ARTWORK")
+    sec.strikethrough:SetColorTexture(0.5, 0.5, 0.5, 0.3)
+    sec.strikethrough:SetHeight(1)
+    sec.strikethrough:Hide()
+
+    sec.dismissed = false
+    combinedSectionPool[index] = sec
+    return sec
+end
+
+local function ShowCombinedPopup(alertGroups)
+    local f = CreateCombinedPopupFrame()
+
+    -- Hide all pooled sections first
+    for _, sec in ipairs(combinedSectionPool) do
+        sec.header:Hide()
+        sec.dismissBtn:Hide()
+        sec.body:Hide()
+        sec.strikethrough:Hide()
+        sec.dismissed = false
+    end
+
+    local y = f.contentTop
+    for idx, group in ipairs(alertGroups) do
+        local sec = GetCombinedSection(idx)
+
+        -- Section header
+        sec.header:ClearAllPoints()
+        sec.header:SetPoint("TOPLEFT", f, "TOPLEFT", 24, y)
+        sec.header:SetText("|cffffff00— " .. group.sectionTitle .. " —|r")
+        sec.header:SetAlpha(1)
+        sec.header:Show()
+
+        -- Dismiss button anchored to the right of the header
+        sec.dismissBtn:ClearAllPoints()
+        sec.dismissBtn:SetPoint("LEFT", sec.header, "RIGHT", 6, 0)
+        sec.dismissBtn.icon:SetVertexColor(0.7, 0.3, 0.3)
+        sec.dismissBtn.icon:SetDesaturated(false)
+        sec.dismissBtn:Enable()
+        sec.dismissBtn:Show()
+        sec.dismissed = false
+
+        -- Body lines
+        local text = table.concat(group.lines, "\n")
+        sec.body:ClearAllPoints()
+        sec.body:SetPoint("TOPLEFT", f, "TOPLEFT", 30, y - 18)
+        sec.body:SetPoint("RIGHT", f, "RIGHT", -24, 0)
+        sec.body:SetText(text)
+        sec.body:SetAlpha(1)
+        sec.body:Show()
+
+        -- Strikethrough (hidden by default, shown on dismiss)
+        sec.strikethrough:ClearAllPoints()
+        sec.strikethrough:SetPoint("TOPLEFT", sec.header, "LEFT", -2, 0)
+        sec.strikethrough:SetPoint("RIGHT", f, "RIGHT", -24, 0)
+        sec.strikethrough:Hide()
+
+        -- Dismiss click handler
+        local capturedDismissKey = group.dismissKey
+        local capturedSec = sec
+        sec.dismissBtn:SetScript("OnClick", function()
+            if capturedSec.dismissed then return end
+            capturedSec.dismissed = true
+            -- Fire the dismiss action
+            if capturedDismissKey and dismissActions[capturedDismissKey] then
+                dismissActions[capturedDismissKey]()
+            end
+            -- Visual feedback: dim the section and show strikethrough
+            capturedSec.header:SetAlpha(0.35)
+            capturedSec.body:SetAlpha(0.35)
+            capturedSec.dismissBtn.icon:SetVertexColor(0.3, 0.3, 0.3)
+            capturedSec.dismissBtn.icon:SetDesaturated(true)
+            capturedSec.dismissBtn:Disable()
+            capturedSec.strikethrough:Show()
+            DEFAULT_CHAT_FRAME:AddMessage(
+                "|cff00ff00[Daily Reminder]|r " .. group.sectionTitle .. " reminders paused for this session. Type |cffffff00/dr resume|r to re-enable.")
+        end)
+
+        local bodyHeight = sec.body:GetStringHeight() or 14
+        y = y - 18 - bodyHeight - 12  -- header + body + gap
+    end
+
+    -- Resize frame to fit content + OK button
+    f:SetHeight(math.max(160, math.abs(y) + 50))
+    f:Show()
+end
+
+-- Pending popup alert queue (batches multiple popups into one combined window)
+local pendingPopupAlerts = {}
+local pendingFlushScheduled = false
+
+local function FlushPendingAlerts()
+    pendingFlushScheduled = false
+    if #pendingPopupAlerts == 0 then return end
+
+    if #pendingPopupAlerts == 1 then
+        -- Single alert: show individual popup as before
+        local alert = pendingPopupAlerts[1]
+        alert.showPopupFn(alert.lines)
+        PlayAlertSound(alert.soundKey)
+    else
+        -- Multiple alerts: show combined popup
+        local alertGroups = {}
+        for _, alert in ipairs(pendingPopupAlerts) do
+            table.insert(alertGroups, {
+                sectionTitle = alert.sectionTitle,
+                lines = alert.lines,
+                dismissKey = alert.dismissKey,
+            })
+        end
+        ShowCombinedPopup(alertGroups)
+        -- Play the first non-NONE sound
+        for _, alert in ipairs(pendingPopupAlerts) do
+            if alert.soundKey and alert.soundKey ~= "NONE" then
+                PlayAlertSound(alert.soundKey)
+                break
+            end
+        end
+    end
+
+    wipe(pendingPopupAlerts)
+end
+
+-- Schedule a single flush 2.5 seconds after the FIRST queued popup.
+-- The window is wide enough to capture all staggered checks
+-- (login fires at 2s/3s/4s, manual at 0s/0.5s/1s).
+-- Subsequent queue entries within the window are simply collected
+-- without resetting the timer.
+local function SchedulePopupFlush()
+    if not pendingFlushScheduled then
+        pendingFlushScheduled = true
+        C_Timer.After(2.5, FlushPendingAlerts)
+    end
+end
+
+------------------------------------------------------------
+-- Utility
+------------------------------------------------------------
+
+local function GetCharacterKey()
+    return UnitName("player") .. "-" .. GetRealmName()
+end
+
 -- Forward declarations (defined later, referenced in callbacks above their definition)
 local RunQuestCheck
 local RunConsortiumCheck
@@ -328,7 +615,7 @@ local function CreateSetupFrame()
 
     local f = CreateFrame("Frame", "DailyReminderSetupPopup", UIParent, "BackdropTemplate")
     f:SetSize(380, 270)
-    f:SetPoint("CENTER")
+    f:SetPoint("TOP", UIParent, "TOP", 0, -100)
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
@@ -428,6 +715,19 @@ local function CreateSetupFrame()
     questSpacer:SetPoint("TOPLEFT", cbMasterQ, "BOTTOMLEFT", 0, 0)
     questSpacer:SetSize(1, 1)
 
+    -- Forward-declare professions collapse state for shared height updater
+    local profSubsCollapsed = true
+    local profSubsHeight = #trackableCooldowns * 23
+    local profSpacer  -- assigned later
+
+    -- Shared height updater (accounts for both collapsible sections)
+    local function UpdateSetupFrameHeight()
+        local baseHeight = 270
+        local questExtra = questSubsCollapsed and 0 or questSubsHeight
+        local profExtra = profSubsCollapsed and 0 or profSubsHeight
+        f:SetHeight(baseHeight + questExtra + profExtra)
+    end
+
     local function UpdateQuestCollapse()
         if questSubsCollapsed then
             questSubsContainer:Hide()
@@ -438,10 +738,7 @@ local function CreateSetupFrame()
             questSpacer:SetHeight(questSubsHeight)
             toggleIcon:SetTexture("Interface\\Buttons\\UI-MinusButton-UP")
         end
-        -- Resize the frame
-        local baseHeight = 270
-        local extraHeight = questSubsCollapsed and 0 or questSubsHeight
-        f:SetHeight(baseHeight + extraHeight)
+        UpdateSetupFrameHeight()
     end
 
     toggleBtn:SetScript("OnClick", function()
@@ -470,6 +767,79 @@ local function CreateSetupFrame()
     local sec3 = CreateSectionHeader(f, "Professions", cb7, -10)
     local cb8 = CreateSetupCheckbox(f, "Cooldown Tracking", "checkProfessions", sec3, -2, "GameFontNormalSmall")
 
+    -- Collapse toggle for profession cooldown sub-categories
+    local profSubsContainer = CreateFrame("Frame", nil, f)
+    profSubsContainer:SetPoint("TOPLEFT", cb8, "BOTTOMLEFT", 16, 0)
+    profSubsContainer:SetSize(300, 1)
+    profSubsContainer:Hide()
+
+    local profSubAnchor = profSubsContainer:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    profSubAnchor:SetPoint("TOPLEFT", 0, 0)
+    profSubAnchor:SetText("")
+    profSubAnchor:SetHeight(1)
+
+    local profCDCheckboxes = {}
+    local lastProfAnchor = profSubAnchor
+    for _, tc in ipairs(trackableCooldowns) do
+        local pcb = CreateFrame("CheckButton", nil, profSubsContainer, "UICheckButtonTemplate")
+        pcb:SetPoint("TOPLEFT", lastProfAnchor, "BOTTOMLEFT", 0, -2)
+        pcb:SetSize(22, 22)
+        pcb.text = pcb:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        pcb.text:SetPoint("LEFT", pcb, "RIGHT", 2, 0)
+        pcb.text:SetText(tc.label .. "  |cff888888(" .. tc.profession .. ")|r")
+        pcb:SetChecked(true) -- default: track all cooldowns
+        pcb.trackKey = tc.key
+        table.insert(profCDCheckboxes, pcb)
+        lastProfAnchor = pcb
+    end
+
+    -- Toggle button (+/-) for professions sub-categories
+    local profToggleBtn = CreateFrame("Button", nil, f)
+    profToggleBtn:SetSize(16, 16)
+    profToggleBtn:SetPoint("LEFT", cb8.text, "RIGHT", 6, 0)
+    local profToggleIcon = profToggleBtn:CreateTexture(nil, "ARTWORK")
+    profToggleIcon:SetAllPoints()
+    profToggleIcon:SetTexture("Interface\\Buttons\\UI-PlusButton-UP")
+    local profToggleHL = profToggleBtn:CreateTexture(nil, "HIGHLIGHT")
+    profToggleHL:SetAllPoints()
+    profToggleHL:SetTexture("Interface\\Buttons\\UI-PlusButton-Hilight")
+    profToggleHL:SetBlendMode("ADD")
+
+    -- Spacer below professions master checkbox
+    profSpacer = CreateFrame("Frame", nil, f)
+    profSpacer:SetPoint("TOPLEFT", cb8, "BOTTOMLEFT", 0, 0)
+    profSpacer:SetSize(1, 1)
+
+    local function UpdateProfCollapse()
+        if profSubsCollapsed then
+            profSubsContainer:Hide()
+            profSpacer:SetHeight(1)
+            profToggleIcon:SetTexture("Interface\\Buttons\\UI-PlusButton-UP")
+        else
+            profSubsContainer:Show()
+            profSpacer:SetHeight(profSubsHeight)
+            profToggleIcon:SetTexture("Interface\\Buttons\\UI-MinusButton-UP")
+        end
+        UpdateSetupFrameHeight()
+    end
+
+    profToggleBtn:SetScript("OnClick", function()
+        profSubsCollapsed = not profSubsCollapsed
+        UpdateProfCollapse()
+    end)
+
+    -- Visual enable/disable for profession sub-checkboxes
+    local function UpdateSetupProfSubs()
+        local on = cb8:GetChecked()
+        for _, pcb in ipairs(profCDCheckboxes) do
+            if on then pcb:Enable(); pcb.text:SetTextColor(0.8, 0.8, 0.8)
+            else       pcb:Disable(); pcb.text:SetTextColor(0.4, 0.4, 0.4) end
+        end
+    end
+    cb8:HookScript("OnClick", UpdateSetupProfSubs)
+    UpdateSetupProfSubs()
+    UpdateProfCollapse()
+
     -- Save button
     local saveBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     saveBtn:SetSize(140, 24)
@@ -478,6 +848,13 @@ local function CreateSetupFrame()
     saveBtn:SetScript("OnClick", function()
         for _, cb in ipairs(checkboxes) do
             DailyReminderDB[cb.dbKey] = cb:GetChecked() and true or false
+        end
+        -- Save per-character cooldown preferences from the wizard
+        local charKey = GetCharacterKey()
+        if not DailyReminderDB.profCDPrefs then DailyReminderDB.profCDPrefs = {} end
+        if not DailyReminderDB.profCDPrefs[charKey] then DailyReminderDB.profCDPrefs[charKey] = {} end
+        for _, pcb in ipairs(profCDCheckboxes) do
+            DailyReminderDB.profCDPrefs[charKey][pcb.trackKey] = pcb:GetChecked() and true or false
         end
         DailyReminderDB.firstRun = false
         f:Hide()
@@ -533,9 +910,6 @@ local function IsQuestTurnedIn(questID)
     return false
 end
 
-local function GetCharacterKey()
-    return UnitName("player") .. "-" .. GetRealmName()
-end
 
 local function GetCurrentMonth()
     return date("%Y-%m")
@@ -638,7 +1012,7 @@ local function CreateConsortiumFrame()
 
     local f = CreateFrame("Frame", "DailyReminderConsortiumFrame", UIParent, "BackdropTemplate")
     f:SetSize(540, 300)
-    f:SetPoint("CENTER")
+    f:SetPoint("TOP", UIParent, "TOP", 0, -100)
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
@@ -965,18 +1339,21 @@ local function GetCharCooldownSummary(charKey)
                 if not seenShared[key] then
                     seenShared[key] = true
                     seenSpell[spellID] = true
-                    local remaining = cdData.readyAt - now
-                    if remaining > 0 then
-                        local displayName = info.name
-                        if cdData.castSpellID and cdData.castSpellID ~= spellID then
-                            local castInfo = professionCooldowns[cdData.castSpellID]
-                            if castInfo then displayName = castInfo.name end
+                    local trackKey = info.shared or tostring(spellID)
+                    if IsCooldownTracked(charKey, trackKey) then
+                        local remaining = cdData.readyAt - now
+                        if remaining > 0 then
+                            local displayName = info.name
+                            if cdData.castSpellID and cdData.castSpellID ~= spellID then
+                                local castInfo = professionCooldowns[cdData.castSpellID]
+                                if castInfo then displayName = castInfo.name end
+                            end
+                            table.insert(results, {
+                                profession = info.profession,
+                                name       = displayName,
+                                remaining  = remaining,
+                            })
                         end
-                        table.insert(results, {
-                            profession = info.profession,
-                            name       = displayName,
-                            remaining  = remaining,
-                        })
                     end
                 end
             end
@@ -991,11 +1368,14 @@ local function GetCharCooldownSummary(charKey)
                 local key = info.shared or spellID
                 if not seenShared[key] then
                     seenShared[key] = true
-                    table.insert(results, {
-                        profession = info.profession,
-                        name       = info.name,
-                        remaining  = 0,
-                    })
+                    local trackKey = info.shared or tostring(spellID)
+                    if IsCooldownTracked(charKey, trackKey) then
+                        table.insert(results, {
+                            profession = info.profession,
+                            name       = info.name,
+                            remaining  = 0,
+                        })
+                    end
                 end
             end
         end
@@ -1033,7 +1413,7 @@ local function CreateProfessionsFrame()
 
     local f = CreateFrame("Frame", "DailyReminderProfessionsFrame", UIParent, "BackdropTemplate")
     f:SetSize(PROF_FRAME_WIDTH, 300)
-    f:SetPoint("CENTER")
+    f:SetPoint("TOP", UIParent, "TOP", 0, -100)
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
@@ -1057,7 +1437,7 @@ local function CreateProfessionsFrame()
     -- Subtitle
     local subtitle = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     subtitle:SetPoint("TOP", title, "BOTTOM", 0, -4)
-    subtitle:SetText("Tailoring cloths, Alchemy transmutes & Leatherworking — all characters")
+    subtitle:SetText("Tailoring, Alchemy, Leatherworking, Jewelcrafting & Enchanting — all characters")
 
     -- Close button
     local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
@@ -1378,36 +1758,54 @@ local function GetCompletedQuestIDs()
 end
 
 -- Generic alert dispatch: fires sound and the chosen alert type
-local function FireAlert(results, soundKey, alertType, showPopupFn)
+-- For POPUP alerts, results are queued and batched — if multiple categories
+-- fire POPUP alerts close together they are shown in a single combined window.
+local function FireAlert(results, soundKey, alertType, showPopupFn, sectionTitle, dismissKey)
     if #results == 0 then return end
 
     if alertType == "CHAT" then
         for _, r in ipairs(results) do
+            local prefix = (r.category ~= "") and (r.category .. ": ") or ""
             DEFAULT_CHAT_FRAME:AddMessage(
-                "|cff00ff00[Daily Reminder]|r " .. r.category .. " quest ready to turn in: |cffffff00" .. r.name .. "|r"
+                "|cff00ff00[Daily Reminder]|r " .. prefix .. "|cffffff00" .. r.name .. "|r"
             )
         end
+        PlayAlertSound(soundKey)
 
     elseif alertType == "RAID_WARNING" then
         for _, r in ipairs(results) do
+            local prefix = (r.category ~= "") and (r.category .. ": ") or ""
             DEFAULT_CHAT_FRAME:AddMessage(
-                "|cff00ff00[Daily Reminder]|r " .. r.category .. " quest ready to turn in: |cffffff00" .. r.name .. "|r"
+                "|cff00ff00[Daily Reminder]|r " .. prefix .. "|cffffff00" .. r.name .. "|r"
             )
         end
         -- Show first result as on-screen raid warning text
+        local rwPrefix = (results[1].category ~= "") and (results[1].category .. ": ") or ""
         RaidNotice_AddMessage(RaidWarningFrame,
-            results[1].category .. " daily ready: " .. results[1].name,
+            rwPrefix .. results[1].name,
             ChatTypeInfo["RAID_WARNING"])
+        PlayAlertSound(soundKey)
 
     elseif alertType == "POPUP" then
         local lines = {}
         for _, r in ipairs(results) do
-            table.insert(lines, "|cffffff00" .. r.category .. ":|r " .. r.name)
+            if r.category ~= "" then
+                table.insert(lines, "|cffffff00" .. r.category .. ":|r " .. r.name)
+            else
+                table.insert(lines, r.name)
+            end
         end
-        showPopupFn(lines)
+        -- Queue for batched display — flush timer resets each time a new
+        -- alert is queued so closely-spaced popups merge into one window.
+        table.insert(pendingPopupAlerts, {
+            sectionTitle = sectionTitle or "Alert",
+            lines        = lines,
+            soundKey     = soundKey,
+            showPopupFn  = showPopupFn,
+            dismissKey   = dismissKey,
+        })
+        SchedulePopupFlush()
     end
-
-    PlayAlertSound(soundKey)
 end
 
 -- Quest + Profession check (uses quest alert settings)
@@ -1438,7 +1836,7 @@ RunQuestCheck = function()
     end
 
     if #results == 0 then return end
-    FireAlert(results, DailyReminderDB.questSound, DailyReminderDB.questAlertType, ShowQuestPopup)
+    FireAlert(results, DailyReminderDB.questSound, DailyReminderDB.questAlertType, ShowQuestPopup, "Quests", "quests")
 end
 
 -- Consortium check (uses consortium alert settings, respects reminder-days threshold)
@@ -1454,9 +1852,9 @@ RunConsortiumCheck = function()
     local results = {}
 
     if status == "available" then
-        table.insert(results, { category = "Consortium", name = "Membership Benefits (available to pick up)" })
+        table.insert(results, { category = "", name = "Available to pick up" })
     elseif status == "ready" then
-        table.insert(results, { category = "Consortium", name = "Membership Benefits (ready to turn in)" })
+        table.insert(results, { category = "", name = "Ready to turn in" })
     end
 
     if #results == 0 then return end
@@ -1464,7 +1862,7 @@ RunConsortiumCheck = function()
     -- Append days-remaining info
     results[1].name = results[1].name .. "  |cffaaaaaa(" .. daysRemaining .. " days left this month)|r"
 
-    FireAlert(results, DailyReminderDB.consortiumSound, DailyReminderDB.consortiumAlertType, ShowConsortiumAlertPopup)
+    FireAlert(results, DailyReminderDB.consortiumSound, DailyReminderDB.consortiumAlertType, ShowConsortiumAlertPopup, "Consortium", "consortium")
 end
 
 -- Profession cooldown check (uses professions alert settings)
@@ -1477,10 +1875,21 @@ RunProfessionsCheck = function()
     local charEntry = DailyReminderDB.professionCDs and DailyReminderDB.professionCDs[charKey]
 
     if not charEntry or not charEntry.lastUpdated then return end
+
+    -- Don't alert if no cooldowns are being tracked for this character
+    local hasAnyTracked = false
+    for _, tc in ipairs(trackableCooldowns) do
+        if IsCooldownTracked(charKey, tc.key) then
+            hasAnyTracked = true
+            break
+        end
+    end
+    if not hasAnyTracked then return end
+
     if #activeCDs > 0 then return end  -- still has active cooldowns
 
     local results = { { category = "Professions", name = "All cooldowns ready" } }
-    FireAlert(results, DailyReminderDB.professionsSound, DailyReminderDB.professionsAlertType, ShowProfessionsAlertPopup)
+    FireAlert(results, DailyReminderDB.professionsSound, DailyReminderDB.professionsAlertType, ShowProfessionsAlertPopup, "Professions", "professions")
 end
 
 ------------------------------------------------------------
@@ -1921,7 +2330,7 @@ local function CreateSettingsCanvas()
     pDesc:SetPoint("TOPLEFT", 0, 0)
     pDesc:SetPoint("RIGHT", -20, 0)
     pDesc:SetJustifyH("LEFT")
-    pDesc:SetText("Track profession cooldowns (Tailoring cloths, Alchemy transmutes,\nLeatherworking Salt Shaker) across all your characters.")
+    pDesc:SetText("Track profession cooldowns across all your characters.")
 
     local pCb = CreateSettingsCheckbox(p, "Enable Profession Cooldown tracking", "checkProfessions", pDesc, -10)
 
@@ -1953,6 +2362,374 @@ local function CreateSettingsCanvas()
     local pTrigCb1 = CreateSettingsCheckbox(p, "On Login / Reload",           "professionsTriggerLogin",         pTrigHeader, -4)
     local pTrigCb2 = CreateSettingsCheckbox(p, "When Leaving an Instance (dungeon / battleground)", "professionsTriggerInstanceLeave", pTrigCb1, -2)
 
+    -- Tracked Cooldowns section (per-character cooldown preferences)
+    local pCDSep = CreateSectionSep(p, pTrigCb2, -12)
+
+    local pCDHeader = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    pCDHeader:SetPoint("TOPLEFT", pCDSep, "BOTTOMLEFT", 0, -8)
+    pCDHeader:SetText("Tracked Cooldowns")
+
+    local pCDDesc = p:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    pCDDesc:SetPoint("TOPLEFT", pCDHeader, "BOTTOMLEFT", 0, -4)
+    pCDDesc:SetPoint("RIGHT", -20, 0)
+    pCDDesc:SetJustifyH("LEFT")
+    pCDDesc:SetTextColor(0.8, 0.8, 0.8)
+    pCDDesc:SetText("Select a character on the right, then toggle which cooldowns to track on the left.")
+
+    -- ===== Container for the two-panel layout =====
+    local panelContainer = CreateFrame("Frame", nil, p)
+    panelContainer:SetPoint("TOPLEFT", pCDDesc, "BOTTOMLEFT", 0, -10)
+    panelContainer:SetSize(540, 200)
+
+    -- -----------------------------------------------
+    -- LEFT BLOCK: Fixed cooldown checkboxes
+    -- -----------------------------------------------
+    local leftPanel = CreateFrame("Frame", nil, panelContainer, "BackdropTemplate")
+    leftPanel:SetPoint("TOPLEFT", 0, 0)
+    leftPanel:SetSize(310, 200)
+    leftPanel:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    leftPanel:SetBackdropColor(0.08, 0.08, 0.08, 0.7)
+    leftPanel:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.6)
+
+    -- "No character selected" label (shown when no character is active)
+    local noCharLabel = leftPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    noCharLabel:SetPoint("CENTER", 0, 0)
+    noCharLabel:SetText("|cff999999Select a character to configure cooldowns.|r")
+
+    -- Header inside left panel showing selected character name
+    local leftCharName = leftPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    leftCharName:SetPoint("TOPLEFT", 10, -10)
+    leftCharName:SetText("")
+
+    -- Create fixed checkboxes for each trackable cooldown (always present, just updated)
+    local cdCheckboxes = {}
+    for i, tc in ipairs(trackableCooldowns) do
+        local cb = CreateFrame("CheckButton", nil, leftPanel, "UICheckButtonTemplate")
+        if i == 1 then
+            cb:SetPoint("TOPLEFT", leftCharName, "BOTTOMLEFT", 4, -6)
+        else
+            cb:SetPoint("TOPLEFT", cdCheckboxes[i - 1], "BOTTOMLEFT", 0, -2)
+        end
+        cb:SetSize(22, 22)
+        cb.text = cb:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        cb.text:SetPoint("LEFT", cb, "RIGHT", 2, 0)
+        cb.text:SetText(tc.label .. "  |cff888888(" .. tc.profession .. ")|r")
+        cb:SetChecked(false)
+        cb:Disable()
+        cb.trackKey = tc.key
+        cb:SetScript("OnClick", function(self)
+            if self.boundCharKey then
+                SetCooldownTracked(self.boundCharKey, self.trackKey, self:GetChecked() and true or false)
+            end
+        end)
+        table.insert(cdCheckboxes, cb)
+    end
+
+    -- Track currently selected character key
+    local selectedCharKey = nil
+
+    -- Update left panel checkboxes for the given character
+    local function SelectCharacter(charKey, displayName)
+        selectedCharKey = charKey
+        if not charKey then
+            noCharLabel:Show()
+            leftCharName:SetText("")
+            for _, cb in ipairs(cdCheckboxes) do
+                cb:SetChecked(false)
+                cb:Disable()
+                cb.text:SetTextColor(0.4, 0.4, 0.4)
+                cb.boundCharKey = nil
+            end
+            return
+        end
+        noCharLabel:Hide()
+        leftCharName:SetText(displayName or charKey)
+        for _, cb in ipairs(cdCheckboxes) do
+            cb.boundCharKey = charKey
+            cb:SetChecked(IsCooldownTracked(charKey, cb.trackKey))
+            cb:Enable()
+            cb.text:SetTextColor(0.8, 0.8, 0.8)
+        end
+    end
+
+    -- -----------------------------------------------
+    -- RIGHT BLOCK: Scrollable character list with arrows
+    -- -----------------------------------------------
+    local RIGHT_WIDTH = 200
+    local ROW_HEIGHT = 22
+    local VISIBLE_ROWS = 6
+
+    local rightPanel = CreateFrame("Frame", nil, panelContainer, "BackdropTemplate")
+    rightPanel:SetPoint("TOPLEFT", leftPanel, "TOPRIGHT", 10, 0)
+    rightPanel:SetSize(RIGHT_WIDTH, 200)
+    rightPanel:SetBackdrop({
+        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    rightPanel:SetBackdropColor(0.08, 0.08, 0.08, 0.7)
+    rightPanel:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.6)
+
+    -- "Characters" label at top
+    local rightTitle = rightPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    rightTitle:SetPoint("TOP", 0, -6)
+    rightTitle:SetText("Characters")
+
+    -- Up arrow button (anchored near the top, below title)
+    local upBtn = CreateFrame("Button", nil, rightPanel)
+    upBtn:SetSize(RIGHT_WIDTH - 20, 16)
+    upBtn:SetPoint("TOP", rightTitle, "BOTTOM", 0, -2)
+    local upArrow = upBtn:CreateTexture(nil, "ARTWORK")
+    upArrow:SetSize(16, 8)
+    upArrow:SetPoint("CENTER")
+    upArrow:SetTexture("Interface\\Buttons\\Arrow-Up-Up")
+    local upHL = upBtn:CreateTexture(nil, "HIGHLIGHT")
+    upHL:SetSize(16, 8)
+    upHL:SetPoint("CENTER")
+    upHL:SetTexture("Interface\\Buttons\\Arrow-Up-Up")
+    upHL:SetBlendMode("ADD")
+    upHL:SetAlpha(0.4)
+    upBtn.arrow = upArrow
+
+    -- Down arrow button (anchored near the bottom of the panel)
+    local downBtn = CreateFrame("Button", nil, rightPanel)
+    downBtn:SetSize(RIGHT_WIDTH - 20, 16)
+    downBtn:SetPoint("BOTTOM", rightPanel, "BOTTOM", 0, 6)
+    local downArrow = downBtn:CreateTexture(nil, "ARTWORK")
+    downArrow:SetSize(16, 8)
+    downArrow:SetPoint("CENTER")
+    downArrow:SetTexture("Interface\\Buttons\\Arrow-Down-Up")
+    local downHL = downBtn:CreateTexture(nil, "HIGHLIGHT")
+    downHL:SetSize(16, 8)
+    downHL:SetPoint("CENTER")
+    downHL:SetTexture("Interface\\Buttons\\Arrow-Down-Up")
+    downHL:SetBlendMode("ADD")
+    downHL:SetAlpha(0.4)
+    downBtn.arrow = downArrow
+
+    -- Visible row buttons (between the two arrows)
+    local listArea = CreateFrame("Frame", nil, rightPanel)
+    listArea:SetPoint("TOPLEFT", upBtn, "BOTTOMLEFT", 0, -2)
+    listArea:SetPoint("TOPRIGHT", upBtn, "BOTTOMRIGHT", 0, -2)
+    listArea:SetPoint("BOTTOM", downBtn, "TOP", 0, 2)
+
+    local rowButtons = {}
+    for i = 1, VISIBLE_ROWS do
+        local row = CreateFrame("Button", nil, listArea)
+        row:SetSize(RIGHT_WIDTH - 20, ROW_HEIGHT)
+        if i == 1 then
+            row:SetPoint("TOPLEFT", listArea, "TOPLEFT", 2, 0)
+        else
+            row:SetPoint("TOPLEFT", rowButtons[i - 1], "BOTTOMLEFT", 0, 0)
+        end
+
+        -- Selection highlight background
+        local selBg = row:CreateTexture(nil, "BACKGROUND")
+        selBg:SetAllPoints()
+        selBg:SetColorTexture(1, 0.82, 0, 0.15)
+        selBg:Hide()
+        row.selBg = selBg
+
+        -- Hover highlight
+        local hoverBg = row:CreateTexture(nil, "HIGHLIGHT")
+        hoverBg:SetAllPoints()
+        hoverBg:SetColorTexture(1, 1, 1, 0.08)
+
+        -- Delete button (small X on the right side of the row)
+        local delBtn = CreateFrame("Button", nil, row)
+        delBtn:SetSize(14, 14)
+        delBtn:SetPoint("RIGHT", -2, 0)
+        local delTex = delBtn:CreateTexture(nil, "ARTWORK")
+        delTex:SetAllPoints()
+        delTex:SetTexture("Interface\\Buttons\\UI-StopButton")
+        delTex:SetVertexColor(0.6, 0.2, 0.2)
+        local delHL = delBtn:CreateTexture(nil, "HIGHLIGHT")
+        delHL:SetAllPoints()
+        delHL:SetTexture("Interface\\Buttons\\UI-StopButton")
+        delHL:SetBlendMode("ADD")
+        delHL:SetAlpha(0.5)
+        delBtn:Hide()
+        row.delBtn = delBtn
+
+        -- Character name text (leave room for the delete button)
+        local nameText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        nameText:SetPoint("LEFT", 6, 0)
+        nameText:SetPoint("RIGHT", delBtn, "LEFT", -2, 0)
+        nameText:SetJustifyH("LEFT")
+        row.nameText = nameText
+
+        row:Hide()
+        table.insert(rowButtons, row)
+    end
+
+    -- Empty state label (shown when no characters exist)
+    local emptyLabel = rightPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    emptyLabel:SetPoint("CENTER", 0, -10)
+    emptyLabel:SetWidth(RIGHT_WIDTH - 20)
+    emptyLabel:SetText("|cff999999No profession data yet.|r")
+    emptyLabel:Hide()
+
+    -- Scroll state
+    local charList = {}         -- sorted charKey entries: { key, display, class }
+    local scrollOffset = 0      -- index of the first visible row (0-based)
+
+    -- Forward-declare BuildTrackedCooldownsUI so delete handlers can call it
+    local BuildTrackedCooldownsUI
+
+    -- Update arrow enabled/disabled state
+    local function UpdateArrows()
+        local maxOffset = math.max(0, #charList - VISIBLE_ROWS)
+        if scrollOffset <= 0 then
+            upArrow:SetDesaturated(true)
+            upArrow:SetAlpha(0.3)
+            upBtn:Disable()
+        else
+            upArrow:SetDesaturated(false)
+            upArrow:SetAlpha(1)
+            upBtn:Enable()
+        end
+        if scrollOffset >= maxOffset then
+            downArrow:SetDesaturated(true)
+            downArrow:SetAlpha(0.3)
+            downBtn:Disable()
+        else
+            downArrow:SetDesaturated(false)
+            downArrow:SetAlpha(1)
+            downBtn:Enable()
+        end
+    end
+
+    -- Delete a character's profession data
+    local function DeleteCharacterData(charKey)
+        if DailyReminderDB.professionCDs then
+            DailyReminderDB.professionCDs[charKey] = nil
+        end
+        if DailyReminderDB.profCDPrefs then
+            DailyReminderDB.profCDPrefs[charKey] = nil
+        end
+    end
+
+    -- Refresh the visible rows from charList + scrollOffset
+    local function RefreshCharList()
+        for i = 1, VISIBLE_ROWS do
+            local dataIdx = scrollOffset + i
+            local row = rowButtons[i]
+            if dataIdx <= #charList then
+                local entry = charList[dataIdx]
+                row.charKey = entry.key
+                row.displayName = entry.display
+                row.nameText:SetText(entry.display)
+                row.delBtn:Show()
+                row:Show()
+                -- Highlight selected
+                if selectedCharKey == entry.key then
+                    row.selBg:Show()
+                else
+                    row.selBg:Hide()
+                end
+            else
+                row.charKey = nil
+                row.displayName = nil
+                row.nameText:SetText("")
+                row.delBtn:Hide()
+                row:Hide()
+            end
+        end
+        UpdateArrows()
+    end
+
+    -- Row click handler (select character)
+    for _, row in ipairs(rowButtons) do
+        row:SetScript("OnClick", function(self)
+            if self.charKey then
+                SelectCharacter(self.charKey, self.displayName)
+                RefreshCharList()  -- update highlight
+            end
+        end)
+        -- Delete button click handler
+        row.delBtn:SetScript("OnClick", function(self)
+            local rw = self:GetParent()
+            if rw.charKey then
+                DeleteCharacterData(rw.charKey)
+                BuildTrackedCooldownsUI()
+                -- Refresh the professions status window if it's open
+                if professionsFrame and professionsFrame:IsShown() then
+                    RefreshProfessionsWindow()
+                end
+            end
+        end)
+    end
+
+    -- Arrow click handlers
+    upBtn:SetScript("OnClick", function()
+        if scrollOffset > 0 then
+            scrollOffset = scrollOffset - 1
+            RefreshCharList()
+        end
+    end)
+
+    downBtn:SetScript("OnClick", function()
+        local maxOffset = math.max(0, #charList - VISIBLE_ROWS)
+        if scrollOffset < maxOffset then
+            scrollOffset = scrollOffset + 1
+            RefreshCharList()
+        end
+    end)
+
+    -- Mouse wheel on the list area
+    listArea:EnableMouseWheel(true)
+    listArea:SetScript("OnMouseWheel", function(_, delta)
+        local maxOffset = math.max(0, #charList - VISIBLE_ROWS)
+        scrollOffset = math.max(0, math.min(maxOffset, scrollOffset - delta))
+        RefreshCharList()
+    end)
+
+    -- Master build function: populates charList from DB, selects first char
+    BuildTrackedCooldownsUI = function()
+        wipe(charList)
+        scrollOffset = 0
+        selectedCharKey = nil
+
+        local profData = DailyReminderDB.professionCDs or {}
+        local sortedKeys = {}
+        for k in pairs(profData) do table.insert(sortedKeys, k) end
+        table.sort(sortedKeys)
+
+        for _, charKey in ipairs(sortedKeys) do
+            local charInfo = profData[charKey]
+            local charName = charKey:match("^(.+)-") or charKey
+            local nameDisplay = charName
+            if charInfo.class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[charInfo.class] then
+                local clr = RAID_CLASS_COLORS[charInfo.class]
+                nameDisplay = string.format("|cff%02x%02x%02x%s|r",
+                    clr.r * 255, clr.g * 255, clr.b * 255, charName)
+            end
+            table.insert(charList, { key = charKey, display = nameDisplay, class = charInfo.class })
+        end
+
+        if #charList == 0 then
+            emptyLabel:Show()
+            for _, row in ipairs(rowButtons) do row:Hide() end
+            SelectCharacter(nil)
+            UpdateArrows()
+            return
+        end
+
+        emptyLabel:Hide()
+        -- Auto-select first character
+        SelectCharacter(charList[1].key, charList[1].display)
+        RefreshCharList()
+    end
+
+    -- Rebuild when the professions tab becomes visible
+    panelContainer:SetScript("OnShow", BuildTrackedCooldownsUI)
+
     -- Visual enable/disable for professions sub-controls
     local profSubCbs = { pTrigCb1, pTrigCb2 }
     local function UpdateProfEnabled()
@@ -1962,7 +2739,7 @@ local function CreateSettingsCanvas()
     pCb:HookScript("OnClick", UpdateProfEnabled)
     UpdateProfEnabled()
 
-    FinalizeTab(3, 360)
+    FinalizeTab(3, 580)
 
     return canvas
 end
@@ -2153,6 +2930,9 @@ local function OnEvent(self, event, arg1, arg2, arg3)
 
     -- PLAYER_ENTERING_WORLD: fires on login, reload, and instance transitions
     if event == "PLAYER_ENTERING_WORLD" then
+        -- Don't fire any checks until the first-run wizard has been completed
+        if DailyReminderDB.firstRun then return end
+
         local isLogin  = arg1  -- true on initial login
         local isReload = arg2  -- true on /reload
 

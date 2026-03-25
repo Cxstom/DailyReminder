@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.7
+- **Jewelcrafting cooldown**: Added **Brilliant Glass** (spell ID 47280, 20-hour cooldown) tracking.
+- **Enchanting cooldown**: Added **Void Sphere** (spell ID 28028, 48-hour cooldown) tracking.
+- **Per-character cooldown preferences**: New "Tracked Cooldowns" section in the Professions settings tab lets you choose which cooldowns to track for each synced character. Untracked cooldowns are excluded from alerts and the status window.
+- **Two-panel tracked cooldowns UI**: Left panel shows fixed cooldown checkboxes that update dynamically when a character is selected; right panel has a scrollable character list with up/down arrow buttons and disabled state when entries fit without scrolling.
+- **Delete character data**: Each entry in the character list now has a delete button (×) that removes all profession cooldown data and tracking preferences for that character.
+- **First-run wizard cooldown selection**: The Professions section in the setup wizard now has a collapsible sub-section (matching the Quests pattern) where new users can pick which cooldowns to track for the current character before completing setup.
+- **Smart alert guard**: Profession alerts no longer fire "All cooldowns ready" when a character has zero tracked cooldowns.
+- **Combined popup alerts**: When multiple categories (Quests, Consortium, Professions) fire popup alerts close together (e.g. on login), they are merged into a single summary window with section headers instead of overlapping individual popups. Each section has a **dismiss icon** (×) to silence that specific category for the session.
+- **Consortium alert text**: Simplified to remove redundant "Membership Benefits" prefix — now shows "Available to pick up" or "Ready to turn in" with days remaining, since the section header already identifies the category.
+- **First-run alert guard**: Alert checks no longer fire during a fresh install until the setup wizard is completed; checks run only after the player clicks "Save & Continue".
+- Updated the professions status window subtitle and settings description to reflect the newly supported professions (Jewelcrafting, Enchanting).
+- **Popup positioning**: Repositioned all popup windows to a more natural top-center screen position instead of dead center.
+
 ## v1.6
 - **Per-category alert systems**: Quests, Consortium, and Professions now each have fully independent alert configurations (sound, alert type) instead of a single unified setting.
 - **Master quest toggle**: New "Enable Quest Tracking" checkbox lets users disable all quest tracking at once without unchecking each category individually.
