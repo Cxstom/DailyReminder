@@ -253,12 +253,21 @@ local function PlayAlertSound(soundKey)
 end
 
 ------------------------------------------------------------
--- Alert Popup Frames (one per category)
+-- Reusable Frame Helpers
 ------------------------------------------------------------
 
-local function CreateAlertPopupFrame(frameName, titleText, onDismiss)
+-- Shared backdrop definition for all dark dialog frames (do not modify)
+local DARK_DIALOG_BACKDROP = {
+    bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true, tileSize = 32, edgeSize = 32,
+    insets = { left = 8, right = 8, top = 8, bottom = 8 },
+}
+
+-- Create a movable, dark-backdrop dialog frame anchored at top-center
+local function CreateDarkDialogFrame(frameName, width, height)
     local f = CreateFrame("Frame", frameName, UIParent, "BackdropTemplate")
-    f:SetSize(360, 200)
+    f:SetSize(width, height)
     f:SetPoint("TOP", UIParent, "TOP", 0, -100)
     f:SetMovable(true)
     f:EnableMouse(true)
@@ -266,14 +275,17 @@ local function CreateAlertPopupFrame(frameName, titleText, onDismiss)
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", f.StopMovingOrSizing)
     f:SetFrameStrata("DIALOG")
-
-    f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 32,
-        insets = { left = 8, right = 8, top = 8, bottom = 8 },
-    })
+    f:SetBackdrop(DARK_DIALOG_BACKDROP)
     f:SetBackdropColor(0.1, 0.1, 0.1, 0.95)
+    return f
+end
+
+------------------------------------------------------------
+-- Alert Popup Frames (one per category)
+------------------------------------------------------------
+
+local function CreateAlertPopupFrame(frameName, titleText, onDismiss)
+    local f = CreateDarkDialogFrame(frameName, 360, 200)
 
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", 0, -16)
@@ -309,53 +321,35 @@ local function CreateAlertPopupFrame(frameName, titleText, onDismiss)
     return f
 end
 
--- Quest alert popup
-local questPopupFrame
-
-local function ShowQuestPopup(lines)
-    if not questPopupFrame then
-        questPopupFrame = CreateAlertPopupFrame("DailyReminderQuestPopup",
-            "|cff00ff00Daily Reminder — Quests|r",
-            function() questDismissedThisSession = true end)
+-- Factory for category alert popup shower functions
+local function CreatePopupShower(frameName, titleText, onDismiss)
+    local frame
+    return function(lines)
+        if not frame then
+            frame = CreateAlertPopupFrame(frameName, titleText, onDismiss)
+        end
+        local text = table.concat(lines, "\n")
+        frame.body:SetText(text)
+        local textHeight = frame.body:GetStringHeight()
+        frame:SetHeight(math.max(140, textHeight + 90))
+        frame:Show()
     end
-    local text = table.concat(lines, "\n")
-    questPopupFrame.body:SetText(text)
-    local textHeight = questPopupFrame.body:GetStringHeight()
-    questPopupFrame:SetHeight(math.max(140, textHeight + 90))
-    questPopupFrame:Show()
 end
 
--- Consortium alert popup
-local consortiumAlertPopupFrame
+local ShowQuestPopup = CreatePopupShower(
+    "DailyReminderQuestPopup",
+    "|cff00ff00Daily Reminder — Quests|r",
+    function() questDismissedThisSession = true end)
 
-local function ShowConsortiumAlertPopup(lines)
-    if not consortiumAlertPopupFrame then
-        consortiumAlertPopupFrame = CreateAlertPopupFrame("DailyReminderConsortiumAlertPopup",
-            "|cff00ff00Daily Reminder — Consortium|r",
-            function() consortiumDismissedThisSession = true end)
-    end
-    local text = table.concat(lines, "\n")
-    consortiumAlertPopupFrame.body:SetText(text)
-    local textHeight = consortiumAlertPopupFrame.body:GetStringHeight()
-    consortiumAlertPopupFrame:SetHeight(math.max(140, textHeight + 90))
-    consortiumAlertPopupFrame:Show()
-end
+local ShowConsortiumAlertPopup = CreatePopupShower(
+    "DailyReminderConsortiumAlertPopup",
+    "|cff00ff00Daily Reminder — Consortium|r",
+    function() consortiumDismissedThisSession = true end)
 
--- Professions alert popup
-local professionsAlertPopupFrame
-
-local function ShowProfessionsAlertPopup(lines)
-    if not professionsAlertPopupFrame then
-        professionsAlertPopupFrame = CreateAlertPopupFrame("DailyReminderProfessionsAlertPopup",
-            "|cff00ff00Daily Reminder — Professions|r",
-            function() professionsDismissedThisSession = true end)
-    end
-    local text = table.concat(lines, "\n")
-    professionsAlertPopupFrame.body:SetText(text)
-    local textHeight = professionsAlertPopupFrame.body:GetStringHeight()
-    professionsAlertPopupFrame:SetHeight(math.max(140, textHeight + 90))
-    professionsAlertPopupFrame:Show()
-end
+local ShowProfessionsAlertPopup = CreatePopupShower(
+    "DailyReminderProfessionsAlertPopup",
+    "|cff00ff00Daily Reminder — Professions|r",
+    function() professionsDismissedThisSession = true end)
 
 -- Combined alert popup (used when multiple categories fire POPUP alerts)
 local combinedPopupFrame
@@ -371,23 +365,7 @@ local dismissActions = {
 local function CreateCombinedPopupFrame()
     if combinedPopupFrame then return combinedPopupFrame end
 
-    local f = CreateFrame("Frame", "DailyReminderCombinedPopup", UIParent, "BackdropTemplate")
-    f:SetSize(380, 200)
-    f:SetPoint("TOP", UIParent, "TOP", 0, -100)
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    f:SetFrameStrata("DIALOG")
-
-    f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 32,
-        insets = { left = 8, right = 8, top = 8, bottom = 8 },
-    })
-    f:SetBackdropColor(0.1, 0.1, 0.1, 0.95)
+    local f = CreateDarkDialogFrame("DailyReminderCombinedPopup", 380, 200)
 
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", 0, -16)
@@ -595,6 +573,33 @@ local function GetCharacterKey()
     return UnitName("player") .. "-" .. GetRealmName()
 end
 
+-- Class-coloured character name (strip realm for display)
+local function GetClassColoredName(charKey, className)
+    local charName = charKey:match("^(.+)-") or charKey
+    if className and RAID_CLASS_COLORS and RAID_CLASS_COLORS[className] then
+        local c = RAID_CLASS_COLORS[className]
+        return string.format("|cff%02x%02x%02x%s|r", c.r * 255, c.g * 255, c.b * 255, charName)
+    end
+    return charName
+end
+
+-- Collect and sort keys from a table alphabetically
+local function GetSortedKeys(tbl)
+    local keys = {}
+    for k in pairs(tbl) do
+        table.insert(keys, k)
+    end
+    table.sort(keys)
+    return keys
+end
+
+-- Reset all session dismiss flags
+local function ResetAllDismissFlags()
+    questDismissedThisSession = false
+    consortiumDismissedThisSession = false
+    professionsDismissedThisSession = false
+end
+
 -- Forward declarations (defined later, referenced in callbacks above their definition)
 local RunQuestCheck
 local RunConsortiumCheck
@@ -603,6 +608,13 @@ local ShowConsortiumWindow
 local ShowProfessionsWindow
 local RefreshProfessionsWindow
 local professionsFrame
+
+-- Run all checks with standard staggered timing (immediate / 0.5s / 1s)
+local function RunAllChecksStaggered()
+    RunQuestCheck()
+    C_Timer.After(0.5, RunConsortiumCheck)
+    C_Timer.After(1, RunProfessionsCheck)
+end
 
 ------------------------------------------------------------
 -- First-Run Setup Popup
@@ -613,23 +625,7 @@ local setupFrame
 local function CreateSetupFrame()
     if setupFrame then return setupFrame end
 
-    local f = CreateFrame("Frame", "DailyReminderSetupPopup", UIParent, "BackdropTemplate")
-    f:SetSize(380, 270)
-    f:SetPoint("TOP", UIParent, "TOP", 0, -100)
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    f:SetFrameStrata("DIALOG")
-
-    f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 32,
-        insets = { left = 8, right = 8, top = 8, bottom = 8 },
-    })
-    f:SetBackdropColor(0.1, 0.1, 0.1, 0.95)
+    local f = CreateDarkDialogFrame("DailyReminderSetupPopup", 380, 270)
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -1010,23 +1006,7 @@ local consortiumFrame
 local function CreateConsortiumFrame()
     if consortiumFrame then return consortiumFrame end
 
-    local f = CreateFrame("Frame", "DailyReminderConsortiumFrame", UIParent, "BackdropTemplate")
-    f:SetSize(540, 300)
-    f:SetPoint("TOP", UIParent, "TOP", 0, -100)
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    f:SetFrameStrata("DIALOG")
-
-    f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 32,
-        insets = { left = 8, right = 8, top = 8, bottom = 8 },
-    })
-    f:SetBackdropColor(0.1, 0.1, 0.1, 0.95)
+    local f = CreateDarkDialogFrame("DailyReminderConsortiumFrame", 540, 300)
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -1087,11 +1067,7 @@ local function RefreshConsortiumWindow()
     local rowIndex = 0
 
     -- Sort characters alphabetically
-    local sortedKeys = {}
-    for k in pairs(data) do
-        table.insert(sortedKeys, k)
-    end
-    table.sort(sortedKeys)
+    local sortedKeys = GetSortedKeys(data)
 
     for _, charKey in ipairs(sortedKeys) do
         local info = data[charKey]
@@ -1108,13 +1084,7 @@ local function RefreshConsortiumWindow()
         local statusInfo = consortiumStatusDisplay[displayStatus] or consortiumStatusDisplay.stale
 
         -- Class-coloured character name (strip realm for display)
-        local charName = charKey:match("^(.+)-") or charKey
-        local nameDisplay = charName
-        if info.class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[info.class] then
-            local c = RAID_CLASS_COLORS[info.class]
-            nameDisplay = string.format("|cff%02x%02x%02x%s|r",
-                c.r * 255, c.g * 255, c.b * 255, charName)
-        end
+        local nameDisplay = GetClassColoredName(charKey, info.class)
 
         -- Create or reuse row font strings
         if not f.rows[rowIndex] then
@@ -1202,14 +1172,8 @@ local function EnsureProfCDEntry()
     return charKey, entry
 end
 
--- Record a profession cooldown being triggered (spell cast)
-local function RecordProfessionCooldown(spellID, cooldownData)
-    local charKey, charEntry = EnsureProfCDEntry()
-    local readyAt = time() + cooldownData.cd
-
-    -- Mark this recipe as known
-    charEntry.knownCooldowns[spellID] = true
-
+-- Write cooldown data for a spell, handling shared-group propagation
+local function WriteCooldownData(charEntry, spellID, cooldownData, readyAt)
     if cooldownData.shared then
         for otherID, otherData in pairs(professionCooldowns) do
             if otherData.shared == cooldownData.shared then
@@ -1226,6 +1190,17 @@ local function RecordProfessionCooldown(spellID, cooldownData)
             castSpellID = spellID,
         }
     end
+end
+
+-- Record a profession cooldown being triggered (spell cast)
+local function RecordProfessionCooldown(spellID, cooldownData)
+    local charKey, charEntry = EnsureProfCDEntry()
+    local readyAt = time() + cooldownData.cd
+
+    -- Mark this recipe as known
+    charEntry.knownCooldowns[spellID] = true
+
+    WriteCooldownData(charEntry, spellID, cooldownData, readyAt)
 
     if professionsFrame and professionsFrame:IsShown() then
         RefreshProfessionsWindow()
@@ -1271,23 +1246,7 @@ local function ScanTradeSkillCooldowns()
         charEntry.knownCooldowns[spellID] = true
 
         if cooldown and cooldown > 0 then
-            local readyAt = time() + cooldown
-            if cooldownData.shared then
-                for otherID, otherData in pairs(professionCooldowns) do
-                    if otherData.shared == cooldownData.shared then
-                        charEntry.cooldowns[otherID] = {
-                            readyAt     = readyAt,
-                            castSpellID = spellID,
-                            sharedGroup = cooldownData.shared,
-                        }
-                    end
-                end
-            else
-                charEntry.cooldowns[spellID] = {
-                    readyAt     = readyAt,
-                    castSpellID = spellID,
-                }
-            end
+            WriteCooldownData(charEntry, spellID, cooldownData, time() + cooldown)
         else
             -- Cooldown finished — clear it
             if charEntry.cooldowns[spellID] then
@@ -1411,23 +1370,7 @@ local PROF_COL_POSITIONS = { 4, 150, 280, 430 }
 local function CreateProfessionsFrame()
     if professionsFrame then return professionsFrame end
 
-    local f = CreateFrame("Frame", "DailyReminderProfessionsFrame", UIParent, "BackdropTemplate")
-    f:SetSize(PROF_FRAME_WIDTH, 300)
-    f:SetPoint("TOP", UIParent, "TOP", 0, -100)
-    f:SetMovable(true)
-    f:EnableMouse(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", f.StopMovingOrSizing)
-    f:SetFrameStrata("DIALOG")
-
-    f:SetBackdrop({
-        bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 32,
-        insets = { left = 8, right = 8, top = 8, bottom = 8 },
-    })
-    f:SetBackdropColor(0.1, 0.1, 0.1, 0.95)
+    local f = CreateDarkDialogFrame("DailyReminderProfessionsFrame", PROF_FRAME_WIDTH, 300)
 
     -- Title
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -1556,11 +1499,7 @@ RefreshProfessionsWindow = function()
     local btnIndex = 0
 
     -- Sort characters alphabetically
-    local sortedKeys = {}
-    for k in pairs(profData) do
-        table.insert(sortedKeys, k)
-    end
-    table.sort(sortedKeys)
+    local sortedKeys = GetSortedKeys(profData)
 
     for _, charKey in ipairs(sortedKeys) do
         local charInfo = profData[charKey]
@@ -1581,13 +1520,7 @@ RefreshProfessionsWindow = function()
         -- Skip characters with nothing to show after filtering
         if #cooldowns > 0 or profFilter == "ALL" then
             -- Class-coloured character name (strip realm for display)
-            local charName = charKey:match("^(.+)-") or charKey
-            local nameDisplay = charName
-            if charInfo.class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[charInfo.class] then
-                local c = RAID_CLASS_COLORS[charInfo.class]
-                nameDisplay = string.format("|cff%02x%02x%02x%s|r",
-                    c.r * 255, c.g * 255, c.b * 255, charName)
-            end
+            local nameDisplay = GetClassColoredName(charKey, charInfo.class)
 
             local isCollapsed = profCollapsed[charKey]
 
@@ -2697,19 +2630,11 @@ local function CreateSettingsCanvas()
         selectedCharKey = nil
 
         local profData = DailyReminderDB.professionCDs or {}
-        local sortedKeys = {}
-        for k in pairs(profData) do table.insert(sortedKeys, k) end
-        table.sort(sortedKeys)
+        local sortedKeys = GetSortedKeys(profData)
 
         for _, charKey in ipairs(sortedKeys) do
             local charInfo = profData[charKey]
-            local charName = charKey:match("^(.+)-") or charKey
-            local nameDisplay = charName
-            if charInfo.class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[charInfo.class] then
-                local clr = RAID_CLASS_COLORS[charInfo.class]
-                nameDisplay = string.format("|cff%02x%02x%02x%s|r",
-                    clr.r * 255, clr.g * 255, clr.b * 255, charName)
-            end
+            local nameDisplay = GetClassColoredName(charKey, charInfo.class)
             table.insert(charList, { key = charKey, display = nameDisplay, class = charInfo.class })
         end
 
@@ -2821,12 +2746,8 @@ local function CreateMinimapButton()
     btn:SetScript("OnClick", function(self, button)
         if button == "RightButton" then
             -- Force check
-            questDismissedThisSession = false
-            consortiumDismissedThisSession = false
-            professionsDismissedThisSession = false
-            RunQuestCheck()
-            C_Timer.After(0.5, RunConsortiumCheck)
-            C_Timer.After(1, RunProfessionsCheck)
+            ResetAllDismissFlags()
+            RunAllChecksStaggered()
         elseif IsShiftKeyDown() then
             ShowConsortiumWindow()
         elseif IsControlKeyDown() then
@@ -3002,17 +2923,11 @@ SLASH_DAILYREMINDER2 = "/dailyreminder"
 SlashCmdList["DAILYREMINDER"] = function(msg)
     local cmd = strlower(strtrim(msg))
     if cmd == "resume" then
-        questDismissedThisSession = false
-        consortiumDismissedThisSession = false
-        professionsDismissedThisSession = false
+        ResetAllDismissFlags()
         DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[Daily Reminder]|r Reminders re-enabled for this session.")
     elseif cmd == "check" then
-        questDismissedThisSession = false
-        consortiumDismissedThisSession = false
-        professionsDismissedThisSession = false
-        RunQuestCheck()
-        C_Timer.After(0.5, RunConsortiumCheck)
-        C_Timer.After(1, RunProfessionsCheck)
+        ResetAllDismissFlags()
+        RunAllChecksStaggered()
     elseif cmd == "minimap" then
         DailyReminderDB.minimapHidden = not DailyReminderDB.minimapHidden
         if DailyReminderDB.minimapHidden then

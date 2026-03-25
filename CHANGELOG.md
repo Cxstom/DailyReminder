@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.8
+- **Internal refactoring** — no new features, no behavior changes. Extracted 7 repeated code patterns into shared helpers, reducing the codebase by ~85 lines.
+- **`CreateDarkDialogFrame`**: Consolidated the 17-line dark dialog frame boilerplate used by 5 frame creation functions into a single helper with a shared `DARK_DIALOG_BACKDROP` constant.
+- **`CreatePopupShower`**: Replaced 3 nearly identical `Show*Popup` functions with a factory that returns closures, eliminating 3 redundant frame-variable locals.
+- **`GetClassColoredName`**: Extracted the class-coloured character name formatting block repeated in 3 functions.
+- **`GetSortedKeys`**: Extracted the sorted-keys-from-table pattern repeated in 3 functions.
+- **`WriteCooldownData`**: Extracted the shared/standalone cooldown DB write logic duplicated in `RecordProfessionCooldown` and `ScanTradeSkillCooldowns`.
+- **`ResetAllDismissFlags`**: Extracted the 3-flag dismiss reset repeated in 3 call sites.
+- **`RunAllChecksStaggered`**: Extracted the staggered check pattern (0s / 0.5s / 1s) repeated in 2 call sites.
+
 ## v1.7
 - **Jewelcrafting cooldown**: Added **Brilliant Glass** (spell ID 47280, 20-hour cooldown) tracking.
 - **Enchanting cooldown**: Added **Void Sphere** (spell ID 28028, 48-hour cooldown) tracking.
